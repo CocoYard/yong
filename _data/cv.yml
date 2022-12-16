@@ -2,96 +2,102 @@
   type: map
   contents:
     - name: Full Name
-      value: Albert Einstein
-    - name: Date of Birth
-      value: 14th March 1879
+      value: Yong Cheng
     - name: Languages
-      value: English, German
+      value: English, Chinese(mandarin)
 
 - title: Education
   type: time_table
   contents:
-    - title: PhD
-      institution: University of Zurich, Zurich, Switzerland
-      year: 1905
+    - title: Master of Science in Computer Science
+      institution: Washington University in St. Louis
+      year: 2023
       description:
-        - Description 1.
-        - Description 2.
-        - title: Description 3.
+        - "GPA: 3.9/4"
+        - title: Some courses
           contents:
-            - Sub-description 1.
-            - Sub-description 2.
-    - title: Federal teaching diploma
-      institution: Eidgenössische Technische Hochschule, Zurich, Switzerland
-      year: 1900
+            - Geometric Computing for Biomedicine
+            - Computational Geometry
+            - Rapid Prototype Development and Creative Programming
+            - Data Mining
+            - Artificial Intelligence
+            - Mobile Application Development
+            - Algorithms for Nonlinear Optimization
+            
+    - title: Bachelor of Science in Information and Computing Science
+      institution: Shanghai Ocean University, Shanghai, China
+      year: 2021
       description:
-        - Description 1.
-        - Description 2.
-
+        - "GPA: 3.9/4"
+        - "
+          - Advanced Algebra <br>
+          - Mathematical Analysis <br>
+          - Data Structure and Algorithm <br>
+        "
 - title: Experience
   type: time_table
   contents:
-    - title: Professor of Theoretical Physics
-      institution: Institute for Advanced Study, Princeton University
-      year: 1933 - 1955
+    - title: Teaching Assistant
+      institution: <a href="https://wustl.edu">Washington University in St. Louis</a>
+      year: Aug 2022 - Dec 2022
       description:
-        - Description 1.
-        - Description 2.
-        - title: Description 3.
+        - Graded students' assignments based on quality, which were all labs in C++, where I did code reviews and pushed feedbacks to GitHub.
+        - Held office hours. Helped students with studio/lab questions by elaborating the reason behind the answer or asking them a similar but easier question to give them an inspiration to the original question.
+        - title: Course
           contents:
-            - Sub-description 1.
-            - Sub-description 2.
-    - title: Visiting Professor
-      institution: California Institute of Technology, Pasadena, California, US
-      year: 1933
+            - CSE 332/504N Object-Oriented Software Development Laboratory
+        - title: Involved
+          contents:
+            - C++
+    - title: Software Engineering Intern
+      institution: <a href="https://elekta.com">Elekta, Inc.</a>
+      year: May 2022 - Aug 2022
       description:
-        - Description 1.
-        - Description 2.
+        - "Worked on an agent software for radiation therapy, which is used to manage DICOM files. DICOM is an image standard used in medical area
+such as CT photos. This software is a multifunctional and handy DICOM viewer for the company to use."
+        - "Implemented JavaScript to grant the software the ability to visualize DICOM files, to parse DICOM files, to recursively index attributes, to
+query DICOM files, and to upload and to download files."
+        - "Configured and managed a database and a blob storage for users to put and fetch data. Utilized the framework developed by the company to
+build UI and optimized the interaction experience of that. Implemented RESTful API according to the design documentation."
 
-    - title: Director
-      institution: Kaiser Wilhelm Institute for Physics, Berlin, Germany.
-      year: 1917-1933
-
-    - title: Professor of Theoretical Physics
-      institution: Karl-Ferdinand University, Prague, Czechoslovakia
-      year: 1911 - 1917
-      description:
-
-    - title: Associate Professor of Theoretical Physics
-      institution: University of Zurich, Zurich, Switzerland
-      year: 1909 - 1911
+        - title: Involved
+          contents:
+            - JavaScript
+            - Node.js
+            - Azure blob storage
+            - PostgreSQL
+            - Docker
 
 - title: Open Source Projects
   type: time_table
   contents:
-    - title: <a href="https://github.com/alshedivat/al-folio">al-folio</a>
-      year: 2015-now
-      description: A beautiful, simple, clean, and responsive Jekyll theme for academics.
+    - title: <a href="https://github.com/CocoYard/microtubule-tracking">microtubule-tracking</a>
+      year: 2022
+      description: A tool to track microtubules.
 
 - title: Honors and Awards
   type: time_table
   contents:
-    - year: 1921
+    - year: 2019
       items: 
-        - Nobel Prize in Physics 
-        - Matteucci Medal
-    - year: 2029
+        - Contemporary Undergraduate Mathematical Contest in Modeling - National second prize
+    - year: 2018 & 2019 & 2020
       items: 
-        - Max Planck Medal
+        - The People’s Scholarship in China - The 1st Prize
 
 - title: Academic Interests
   type: nested_list
   contents:
-    - title: Topic 1.
+    - title: Computer Graphics.
       items: 
-        - Description 1.
-        - Description 2.
-    - title: Topic 2.
+        - Geometry Processing.
+        - Rendering.
+    - title: Artificial Intelligence.
       items:
-        - Description 1.
-        - Description 2.
+        - Data Mining.
+        - Deep Learning.
 
 - title: Other Interests
   type: list
   contents:
-    - <u>Hobbies:</u> Hobby 1, Hobby 2, etc.
+    - <u>Hobbies:</u> sketch, gaming, travel, etc.
