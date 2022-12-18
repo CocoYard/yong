@@ -73,8 +73,19 @@ build UI and optimized the interaction experience of that. Implemented RESTful A
   contents:
     - title: <a href="https://github.com/CocoYard/microtubule-tracking">microtubule-tracking</a>
       year: 2022
-      description: A tool to track microtubules.
-
+      description: A tool to track microtubules under the microscope.
+    - title: <a href="https://github.com/CocoYard/CSE-503S-Rapid-prototype-development-and-creative-programming">file sharing, chat room, calendar, sync music player</a>
+      year: 2022
+      description: 4 selected full-stack applications from the course CSE503S Rapid prototype development and creative programming.
+    - title: <a href="https://github.com/CocoYard/ConvexHull-ChansAlgorithm">Chan's Algorithm demo</a>
+      year: 2021
+      description: A demo to display the process of the most efficient algorithm to construct convex hull.
+    - title: <a href="https://github.com/cocoyard/412-pacman">Pac-man's AI agent</a>
+      year: 2021
+      description: An AI agent for pac-man to avoid enemies and eat dots, by the class "CSE412 Intro to AI".
+    - title: <a href="https://github.com/cocoyard/Ray-Tracing">Ray Tracing</a>
+      year: 2020
+      description: A ray-tracing pipeline to render the scenarios.
 - title: Honors and Awards
   type: time_table
   contents:
@@ -100,4 +111,4 @@ build UI and optimized the interaction experience of that. Implemented RESTful A
 - title: Other Interests
   type: list
   contents:
-    - <u>Hobbies:</u> sketch, gaming, travel, etc.
+    - <u>Hobbies:</u> art sketches, gaming, travel, etc.
