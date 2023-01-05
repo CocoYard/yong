@@ -25,4 +25,6 @@ Currently I am doing a research project under the supervision of [Prof. Ju](http
 
 I always enjoy research and creatively solving problems with mathematical thinking. I believe that my experience would help me work as part of a team and effectively serve the industry.
 
-I have social media accounts such as [Linkedin](https://www.linkedin.com/in/yong-cheng-0426a4223/) and [Github](https://github.com/CocoYard).
+Linkedin: [https://www.linkedin.com/in/yong-cheng-0426a4223/](https://www.linkedin.com/in/yong-cheng-0426a4223/)
+
+Github: [https://github.com/CocoYard](https://github.com/CocoYard).
