@@ -19,7 +19,7 @@ selected_papers: true # includes a list of papers marked as "selected={true}"
 social: true  # includes social icons at the bottom of the page
 ---
 <br>
-I am a 2nd year master student at [Washington university in St. Louis](http://wustl.edu) majoring in computer science. I will graduate on May 2023. 
+I am a 2nd year master student at [Washington university in St. Louis](http://wustl.edu) majoring in computer science with an expected graduation date of May 2023. 
 
 Currently I am doing a research project under the supervision of [Prof. Ju](https://www.cse.wustl.edu/~taoju/). I am interested in developing algorithms and tools about graphics, visulization, and application products.
 
