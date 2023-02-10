@@ -91,7 +91,7 @@ build UI and optimized the interaction experience of that. Implemented RESTful A
   contents:
     - year: 2019
       items: 
-        - Contemporary Undergraduate Mathematical Contest in Modeling - National second prize
+        - Contemporary Undergraduate Mathematical Contest in Modeling - National 2nd prize
     - year: 2018 & 2019 & 2020
       items: 
         - The People’s Scholarship in China - The 1st Prize
@@ -106,9 +106,9 @@ build UI and optimized the interaction experience of that. Implemented RESTful A
     - title: Artificial Intelligence.
       items:
         - Data Mining.
-        - Deep Learning.
+        - Machine Learning.
 
 - title: Other Interests
   type: list
   contents:
-    - <u>Hobbies:</u> art sketches, gaming, travel, etc.
+    - <u>Hobbies:</u> video gaming, art sketches, travel, etc.
