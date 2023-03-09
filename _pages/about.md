@@ -27,4 +27,4 @@ I always enjoy research and creatively solving problems with mathematical thinki
 
 Linkedin: [https://www.linkedin.com/in/yong-cheng-0426a4223/](https://www.linkedin.com/in/yong-cheng-0426a4223/)
 
-Github: [https://github.com/CocoYard](https://github.com/CocoYard).
+Github: [https://github.com/CocoYard](https://github.com/CocoYard)
