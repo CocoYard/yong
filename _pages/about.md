@@ -19,12 +19,15 @@ selected_papers: true # includes a list of papers marked as "selected={true}"
 social: true  # includes social icons at the bottom of the page
 ---
 <br>
-I am a 2nd year master student at [Washington university in St. Louis](http://wustl.edu) majoring in computer science with an expected graduation date of May 2023. 
+I am currently a software engineer at [NIO](https://www.nio.com/), a company focusing on building world-class EV with autonomous-driving technology. My expertise lies in solving geometric problems in HD map reconstruction.
 
-Currently I am doing a research project under the supervision of [Prof. Ju](https://www.cse.wustl.edu/~taoju/). I am interested in developing algorithms and tools about graphics, visulization, and application products.
+Prior to NIO, I worked at [IDEA](https://www.idea.edu.cn/), where I contributed to the development of a geometric engine for Computer-Aided Design (CAD). During my time there, I focused on solving performance optimization and intersection algorithm challenges, earning top recognition for my contributions.
 
-I always enjoy research and creatively solving problems with mathematical thinking. I believe that my experience would help me work as part of a team and effectively serve the industry.
+I hold a Master's degree in computer science from [Washington university in St. Louis](http://wustl.edu), where I conducted a research project under the supervision of [Prof. Tao Ju](https://www.cse.wustl.edu/~taoju/). I am interested in developing algorithms and tools about graphics, visualization products.
 
-Linkedin: [https://www.linkedin.com/in/yong-cheng-0426a4223/](https://www.linkedin.com/in/yong-cheng-0426a4223/)
+I thrive on creative problem-solving, always approaching challenges with an open mind.
 
-Github: [https://github.com/CocoYard](https://github.com/CocoYard)
+
+\
+\
+social media accounts: [Linkedin](https://www.linkedin.com/in/yong-cheng-0426a4223/) and [Github](https://github.com/CocoYard).
