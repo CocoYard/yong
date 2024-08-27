@@ -1,7 +1,7 @@
 ---
 layout: post
-date: 2022-08-29 15:59:00-0400
+date: 2023-05-25 15:59:00-0400
 inline: true
 ---
 
-Began working as a teaching assistant at WashU.
+Graduated from [WashU](http://wustl.edu) as a master in computer science.

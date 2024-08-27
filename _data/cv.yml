@@ -14,15 +14,15 @@
       year: 2023
       description:
         - "GPA: 3.9/4"
-        - title: Some courses
-          contents:
-            - Geometric Computing for Biomedicine
-            - Computational Geometry
-            - Rapid Prototype Development and Creative Programming
-            - Data Mining
-            - Artificial Intelligence
-            - Mobile Application Development
-            - Algorithms for Nonlinear Optimization
+        - "
+            - Geometric Computing for Biomedicine <br>
+            - Computational Geometry <br>
+            - Data Mining <br>
+            - Artificial Intelligence <br>
+            - Algorithms for Nonlinear Optimization <br>
+            - Rapid Prototype Development and Creative Programming <br>
+            - Mobile Application Development <br>
+          "
             
     - title: Bachelor of Science in Information and Computing Science
       institution: Shanghai Ocean University, Shanghai, China
@@ -34,15 +34,40 @@
           - Mathematical Analysis <br>
           - Data Structure and Algorithm <br>
         "
-- title: Experience
+- title: Work Experience
   type: time_table
   contents:
+    - title: Software Engineer, Algorithm development and application
+      institution: <a href="https://www.nio.com">NIO, Inc.</a>
+      year: May 2024 - present
+      description:
+        - title: Contents
+          contents: 
+            - Created algorithms for HD map auto-construction, involving geometry/topology processing and reconstruction.
+            - Decreased the occurrences of short link, redundancy, and road disconnection by refactoring intersection-related code.
+        - title: Involved
+          contents:
+            - C++, Linux, Autonomous Driving, HD map
+    - title: Software Engineer, Geometry and Graphics 
+      institution: <a href="https://www.idea.edu.cn">International Digital Economy Academy</a>
+      year: Jun. 2023 - Mar. 2024
+      description:
+        - title: Contents
+          contents: 
+            - Developed infrastructure functionalities, curve and surface discretization, bounding box computation, quartic equation solving, and quadtree implementation.
+            - Optimized loop search algorithms and implemented quadtree to achieve over a hundredfold performance improvement in typical applications.
+            - Rewrote and optimized "loop to face" algorithms, achieving over a thousandfold performance enhancement.
+            - Designed efficient analytic intersection algorithms for a line with a cylinder, a cone, or a torus, ensuring high-speed computation with distance tolerance considerations.
+            - Implemented precise geometric intersection algorithms, surpassing industry standards like Parasolid even in complex scenarios.
+        - title: Involved
+          contents:
+            - CAD, C++
     - title: Teaching Assistant
       institution: <a href="https://wustl.edu">Washington University in St. Louis</a>
-      year: Aug 2022 - Dec 2022
+      year: Aug. 2022 - Dec. 2022
       description:
-        - Graded students' assignments based on quality, which were all labs in C++, where I did code reviews and pushed feedbacks to GitHub.
-        - Held office hours. Helped students with studio/lab questions by elaborating the reason behind the answer or asking them a similar but easier question to give them an inspiration to the original question.
+        - Graded students' assignments by code review.
+        - Held office hours.
         - title: Course
           contents:
             - CSE 332/504N Object-Oriented Software Development Laboratory
@@ -51,24 +76,20 @@
             - C++
     - title: Software Engineering Intern
       institution: <a href="https://elekta.com">Elekta, Inc.</a>
-      year: May 2022 - Aug 2022
+      year: May 2022 - Aug. 2022
       description:
-        - "Worked on an agent software for radiation therapy, which is used to manage DICOM files. DICOM is an image standard used in medical area
-such as CT photos. This software is a multifunctional and handy DICOM viewer for the company to use."
-        - "Implemented JavaScript to grant the software the ability to visualize DICOM files, to parse DICOM files, to recursively index attributes, to
-query DICOM files, and to upload and to download files."
-        - "Configured and managed a database and a blob storage for users to put and fetch data. Utilized the framework developed by the company to
-build UI and optimized the interaction experience of that. Implemented RESTful API according to the design documentation."
+      - title: Contents
+        contents:
+          - "Worked on an agent software for radiation therapy, which is used to manage DICOM files. "
+          - "Implemented JavaScript to grant the software the ability to visualize DICOM files, to parse DICOM files, to recursively index attributes, to
+  query DICOM files, and to upload and to download files."
+          - "Configured and managed a database and a blob storage for users to put and fetch data. Optimized the interaction experience of the UI. Implemented RESTful API according to the design documentation."
 
-        - title: Involved
-          contents:
-            - JavaScript
-            - Node.js
-            - Azure blob storage
-            - PostgreSQL
-            - Docker
+      - title: Involved
+        contents:
+          - JavaScript, Node.js, Azure blob storage, PostgreSQL, Docker
 
-- title: Open Source Projects
+- title: Projects
   type: time_table
   contents:
     - title: <a href="https://github.com/CocoYard/microtubule-tracking">microtubule-tracking</a>
@@ -76,13 +97,13 @@ build UI and optimized the interaction experience of that. Implemented RESTful A
       description: A tool to track microtubules under the microscope.
     - title: <a href="https://github.com/CocoYard/CSE-503S-Rapid-prototype-development-and-creative-programming">file sharing, chat room, calendar, sync music player</a>
       year: 2022
-      description: 4 selected full-stack applications from the course CSE503S Rapid prototype development and creative programming.
+      description: 4 selected full-stack applications from the course <i>CSE503S Rapid prototype development and creative programming </i>.
     - title: <a href="https://github.com/CocoYard/ConvexHull-ChansAlgorithm">Chan's Algorithm demo</a>
       year: 2021
       description: A demo to display the process of the most efficient algorithm to construct convex hull.
     - title: <a href="https://github.com/cocoyard/412-pacman">Pac-man's AI agent</a>
       year: 2021
-      description: An AI agent for pac-man to avoid enemies and eat dots, by the class "CSE412 Intro to AI".
+      description: An AI agent for pac-man to avoid enemies and eat dots, by the class <em>CSE412 Intro to AI</em>.
     - title: <a href="https://github.com/cocoyard/Ray-Tracing">Ray Tracing</a>
       year: 2020
       description: A ray-tracing pipeline to render the scenarios.
@@ -99,15 +120,11 @@ build UI and optimized the interaction experience of that. Implemented RESTful A
 - title: Academic Interests
   type: nested_list
   contents:
-    - title: Computer Graphics.
+    - title: Computer Graphics
       items: 
-        - Geometry Processing.
-        - Rendering.
-    - title: Artificial Intelligence.
-      items:
-        - Data Mining.
+        - Geometry Processing
 
 - title: Other Interests
   type: list
   contents:
-    - <u>Hobbies:</u> video gaming, art sketches, travel, etc.
+    - <u>Hobbies:</u> video gaming, sketching, travel, etc.
