@@ -9,6 +9,12 @@
 - title: Education
   type: time_table
   contents:
+    - title: Ph.D. in Computer Science
+      institution: George Mason University
+      year: 2025 - present
+      description:
+        - "Advisor: Prof. Yotam Gingold"
+        
     - title: Master of Science in Computer Science
       institution: Washington University in St. Louis
       year: 2023
@@ -37,9 +43,19 @@
 - title: Work Experience
   type: time_table
   contents:
+    - title: Teaching Assistant
+      institution: <a href="https://gmu.edu">George Mason University</a>
+      year: Aug. 2025 - present
+      description:
+        - title: Course
+          contents:
+            - CS262 Introduction to Low-Level Programming
+        - title: Involved
+          contents:
+            - C, Linux
     - title: Software Engineer, Algorithm development and application
       institution: <a href="https://www.nio.com">NIO, Inc.</a>
-      year: May 2024 - present
+      year: May 2024 - May 2025
       description:
         - title: Contents
           contents: 
@@ -66,8 +82,6 @@
       institution: <a href="https://wustl.edu">Washington University in St. Louis</a>
       year: Aug. 2022 - Dec. 2022
       description:
-        - Graded students' assignments by code review.
-        - Held office hours.
         - title: Course
           contents:
             - CSE 332/504N Object-Oriented Software Development Laboratory
