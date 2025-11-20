@@ -14,7 +14,7 @@
       year: 2025 - present
       description:
         - "Advisor: Prof. Yotam Gingold"
-        
+
     - title: Master of Science in Computer Science
       institution: Washington University in St. Louis
       year: 2023
@@ -78,6 +78,7 @@
         - title: Involved
           contents:
             - CAD, C++
+            
     - title: Teaching Assistant
       institution: <a href="https://wustl.edu">Washington University in St. Louis</a>
       year: Aug. 2022 - Dec. 2022
