@@ -26,11 +26,3 @@ He earned his Master's degree in Computer Science from Washington University in 
 \
 \
 social media accounts: [Linkedin](https://www.linkedin.com/in/yong-cheng-0426a4223/) and [Github](https://github.com/CocoYard/).
-
----
-
-## Visitor Map
-
-<div style="text-align: center; margin: 30px 0;">
-  <script type="text/javascript" id="clustrmaps" src="//clustrmaps.com/map_v2.js?d=YOUR_MAP_ID&cl=ffffff&w=a"></script>
-</div>
