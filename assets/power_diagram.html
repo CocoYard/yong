@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>High-Res Power Diagram & Regular Triangulation</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #f0f0f0; user-select: none; }
+        canvas { display: block; }
+        #ui {
+            position: absolute; top: 15px; left: 15px; background: rgba(255,255,255,0.9);
+            padding: 15px; font-family: sans-serif; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            pointer-events: auto; /* Allow clicks on UI elements */
+            font-size: 14px; line-height: 1.5; color: #333; z-index: 10;
+        }
+        .toggle-container {
+            margin-top: 12px; padding-top: 12px; border-top: 1px solid #ddd;
+            display: flex; align-items: center; cursor: pointer; font-weight: bold;
+        }
+        .toggle-container input { cursor: pointer; margin-right: 8px; width: 16px; height: 16px; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <strong>Power Diagram Sandbox</strong><br><br>
+        - <strong>Add point</strong>: click on empty space<br>
+        - <strong>Move position</strong>: drag the circle center<br>
+        - <strong>Adjust radius</strong>: drag the circle edge<br>
+        - <strong>Delete point</strong>: Shift + click on the circle<br>
+        <br>
+        <span style="color: #666; font-size: 12px;">Note: dashed circles represent Hidden Points</span>
+
+        <label class="toggle-container">
+            <input type="checkbox" id="toggleRT" checked>
+            Show Regular Triangulation
+        </label>
+
+        <label class="toggle-container">
+            <input type="checkbox" id="toggleSphere">
+            Show Power Spheres (orthogonal circles)
+        </label>
+    </div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+        let showRT = true;
+        let showSphere = false;
+
+        // Listen for toggle changes
+        document.getElementById('toggleRT').addEventListener('change', (e) => {
+            showRT = e.target.checked;
+            render();
+        });
+        document.getElementById('toggleSphere').addEventListener('change', (e) => {
+            showSphere = e.target.checked;
+            render();
+        });
+
+        let points = [
+            {x: 300, y: 300, r: 80, isHidden: false},
+            {x: 500, y: 300, r: 80, isHidden: false},
+            {x: 400, y: 450, r: 80, isHidden: false},
+            {x: 400, y: 350, r: 40, isHidden: false} 
+        ];
+
+        let draggingPoint = null;
+        let dragType = null; 
+
+        // Core logic to fix blurriness on HiDPI screens
+        function resize() {
+            const dpr = window.devicePixelRatio || 1;
+            width = window.innerWidth;
+            height = window.innerHeight;
+
+            // Scale the internal canvas resolution by dpr
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+
+            // Use CSS to force the display size to the actual screen pixel size
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+
+            // Scale the drawing context so the coordinate system stays unaffected
+            ctx.scale(dpr, dpr);
+            render();
+        }
+        window.addEventListener('resize', resize);
+
+        function clipPolygon(polygon, A, B, C) {
+            if (polygon.length === 0) return [];
+            let clipped = [];
+            for (let i = 0; i < polygon.length; i++) {
+                let p1 = polygon[i];
+                let p2 = polygon[(i + 1) % polygon.length];
+                let v1 = A * p1.x + B * p1.y + C;
+                let v2 = A * p2.x + B * p2.y + C;
+
+                if (v1 <= 0) clipped.push(p1);
+                if ((v1 > 0 && v2 <= 0) || (v1 <= 0 && v2 > 0)) {
+                    let t = v1 / (v1 - v2);
+                    clipped.push({
+                        x: p1.x + t * (p2.x - p1.x),
+                        y: p1.y + t * (p2.y - p1.y)
+                    });
+                }
+            }
+            return clipped;
+        }
+
+        function computePowerDiagram() {
+            // Use a bounding box far larger than the canvas so that power-diagram
+            // edges lying outside the visible canvas are still kept. The cell
+            // adjacency (regular triangulation) is derived from these cells, so
+            // clipping to the canvas here would drop off-screen shared edges and
+            // miss the corresponding triangulation links. The canvas clips the
+            // drawing for us, so over-sized cells are harmless visually.
+            const M = 10 * Math.max(width, height);
+            let cells = [];
+            for (let i = 0; i < points.length; i++) {
+                let poly = [
+                    {x: -M, y: -M}, {x: width + M, y: -M},
+                    {x: width + M, y: height + M}, {x: -M, y: height + M}
+                ];
+                let p1 = points[i];
+                let isHidden = false;
+
+                for (let j = 0; j < points.length; j++) {
+                    if (i === j) continue;
+                    let p2 = points[j];
+                    let A = 2 * (p2.x - p1.x);
+                    let B = 2 * (p2.y - p1.y);
+                    let C = p1.x*p1.x - p2.x*p2.x + p1.y*p1.y - p2.y*p2.y - p1.r*p1.r + p2.r*p2.r;
+                    
+                    poly = clipPolygon(poly, A, B, C);
+                    if (poly.length === 0) {
+                        isHidden = true;
+                        break;
+                    }
+                }
+                points[i].isHidden = isHidden;
+                cells.push(poly);
+            }
+            return cells;
+        }
+
+        function shareEdge(poly1, poly2) {
+            if (!poly1 || !poly2 || poly1.length < 3 || poly2.length < 3) return false;
+            let shared = 0;
+            for (let p1 of poly1) {
+                for (let p2 of poly2) {
+                    if (Math.abs(p1.x - p2.x) < 0.1 && Math.abs(p1.y - p2.y) < 0.1) {
+                        shared++;
+                        break;
+                    }
+                }
+            }
+            return shared >= 2;
+        }
+
+        // Orthogonal circle (power sphere) of three weighted points:
+        // the circle orthogonal to all three, centered at the power-diagram vertex
+        // where the three cells meet. Returns {x, y, R2} or null if degenerate.
+        function orthoCircle(p1, p2, p3) {
+            // Radical center: power(C, p1) = power(C, p2) = power(C, p3)
+            let a1 = 2 * (p2.x - p1.x), b1 = 2 * (p2.y - p1.y);
+            let c1 = (p2.x*p2.x - p1.x*p1.x) + (p2.y*p2.y - p1.y*p1.y) + (p1.r*p1.r - p2.r*p2.r);
+            let a2 = 2 * (p3.x - p1.x), b2 = 2 * (p3.y - p1.y);
+            let c2 = (p3.x*p3.x - p1.x*p1.x) + (p3.y*p3.y - p1.y*p1.y) + (p1.r*p1.r - p3.r*p3.r);
+            let det = a1 * b2 - a2 * b1;
+            if (Math.abs(det) < 1e-9) return null; // collinear centers
+            let cx = (c1 * b2 - c2 * b1) / det;
+            let cy = (a1 * c2 - a2 * c1) / det;
+            let R2 = (cx - p1.x) * (cx - p1.x) + (cy - p1.y) * (cy - p1.y) - p1.r * p1.r;
+            return { x: cx, y: cy, R2: R2 };
+        }
+
+        // Is (x, y) a corner of this cell? (the radical center coincides with a
+        // real power-diagram vertex only for genuine triangulation triangles)
+        function hasVertexNear(poly, x, y, tol) {
+            if (!poly) return false;
+            for (let v of poly) {
+                if (Math.abs(v.x - x) < tol && Math.abs(v.y - y) < tol) return true;
+            }
+            return false;
+        }
+
+        function computePowerSpheres(cells) {
+            let spheres = [];
+            for (let i = 0; i < points.length; i++) {
+                if (points[i].isHidden) continue;
+                for (let j = i + 1; j < points.length; j++) {
+                    if (points[j].isHidden) continue;
+                    for (let k = j + 1; k < points.length; k++) {
+                        if (points[k].isHidden) continue;
+                        // The three cells must be mutually adjacent (a triangle)
+                        if (!shareEdge(cells[i], cells[j])) continue;
+                        if (!shareEdge(cells[i], cells[k])) continue;
+                        if (!shareEdge(cells[j], cells[k])) continue;
+                        let s = orthoCircle(points[i], points[j], points[k]);
+                        if (!s) continue;
+                        // Keep only triples that actually meet at a common vertex
+                        if (hasVertexNear(cells[i], s.x, s.y, 2) &&
+                            hasVertexNear(cells[j], s.x, s.y, 2) &&
+                            hasVertexNear(cells[k], s.x, s.y, 2)) {
+                            spheres.push(s);
+                        }
+                    }
+                }
+            }
+            return spheres;
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, width, height);
+            let cells = computePowerDiagram();
+
+            // 1. Draw power cells
+            cells.forEach((poly, i) => {
+                if (poly.length > 0) {
+                    ctx.beginPath();
+                    ctx.moveTo(poly[0].x, poly[0].y);
+                    for (let j = 1; j < poly.length; j++) {
+                        ctx.lineTo(poly[j].x, poly[j].y);
+                    }
+                    ctx.closePath();
+                    ctx.fillStyle = `hsla(${(i * 137) % 360}, 70%, 85%, 0.6)`;
+                    ctx.fill();
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                }
+            });
+
+            // 2. Draw the regular triangulation (gated by the toggle)
+            if (showRT) {
+                ctx.beginPath();
+                for (let i = 0; i < points.length; i++) {
+                    if (points[i].isHidden) continue;
+                    for (let j = i + 1; j < points.length; j++) {
+                        if (points[j].isHidden) continue;
+                        if (shareEdge(cells[i], cells[j])) {
+                            ctx.moveTo(points[i].x, points[i].y);
+                            ctx.lineTo(points[j].x, points[j].y);
+                        }
+                    }
+                }
+                // Switch to bright blue with thicker lines
+                ctx.strokeStyle = '#2980b9';
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
+            }
+
+            // 2.5 Draw the power spheres (orthogonal circles), gated by the toggle
+            if (showSphere) {
+                let spheres = computePowerSpheres(cells);
+                spheres.forEach((s) => {
+                    // Center of the orthogonal circle = power-diagram vertex
+                    ctx.beginPath();
+                    ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
+                    ctx.fillStyle = '#27ae60';
+                    ctx.fill();
+
+                    // Real orthogonal circle only exists when R^2 > 0
+                    if (s.R2 > 0) {
+                        ctx.beginPath();
+                        ctx.arc(s.x, s.y, Math.sqrt(s.R2), 0, Math.PI * 2);
+                        ctx.setLineDash([6, 4]);
+                        ctx.strokeStyle = 'rgba(39, 174, 96, 0.9)';
+                        ctx.lineWidth = 1.5;
+                        ctx.stroke();
+                        ctx.setLineDash([]);
+                    }
+                });
+            }
+
+            // 3. Draw the weighted points
+            points.forEach((p) => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, Math.max(0.1, p.r), 0, Math.PI * 2);
+                if (p.isHidden) {
+                    ctx.setLineDash([5, 5]);
+                    ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    ctx.fillStyle = 'rgba(255, 0, 0, 0.08)';
+                    ctx.fill();
+                } else {
+                    ctx.setLineDash([]);
+                    ctx.strokeStyle = '#333';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                    ctx.fillStyle = '#e74c3c';
+                    ctx.fill();
+                }
+            });
+            ctx.setLineDash([]);
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            // Don't add a point when clicking on the UI panel
+            if(e.target.closest('#ui')) return; 
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            // Shift + click deletes the topmost circle under the cursor
+            // (Ctrl/Cmd are avoided: macOS turns Ctrl+click into a right-click)
+            if (e.shiftKey || e.metaKey || e.ctrlKey) {
+                for (let i = points.length - 1; i >= 0; i--) {
+                    let p = points[i];
+                    let dist = Math.hypot(mouseX - p.x, mouseY - p.y);
+                    if (dist < p.r || Math.abs(dist - p.r) < 8) {
+                        points.splice(i, 1);
+                        render();
+                        return;
+                    }
+                }
+                return; // modifier held but no circle hit — do nothing (don't add)
+            }
+
+            for (let i = points.length - 1; i >= 0; i--) {
+                let p = points[i];
+                let dist = Math.hypot(mouseX - p.x, mouseY - p.y);
+                if (Math.abs(dist - p.r) < 8) {
+                    draggingPoint = p; dragType = 'radius'; return;
+                } else if (dist < p.r) {
+                    draggingPoint = p; dragType = 'center'; return;
+                }
+            }
+            points.push({x: mouseX, y: mouseY, r: 40, isHidden: false});
+            render();
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if(e.target.closest('#ui')) {
+                canvas.style.cursor = 'default';
+                return;
+            }
+
+            if (!draggingPoint) {
+                const rect = canvas.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+                let cursor = 'default';
+                for (let p of points) {
+                    let dist = Math.hypot(mouseX - p.x, mouseY - p.y);
+                    if (Math.abs(dist - p.r) < 8) { cursor = 'ew-resize'; break; }
+                    else if (dist < p.r) { cursor = 'move'; break; }
+                }
+                canvas.style.cursor = cursor;
+                return;
+            }
+            const rect = canvas.getBoundingClientRect();
+            if (dragType === 'center') {
+                draggingPoint.x = e.clientX - rect.left;
+                draggingPoint.y = e.clientY - rect.top;
+            } else if (dragType === 'radius') {
+                draggingPoint.r = Math.max(5, Math.hypot(e.clientX - rect.left - draggingPoint.x, e.clientY - rect.top - draggingPoint.y));
+            }
+            render();
+        });
+
+        window.addEventListener('mouseup', () => { draggingPoint = null; dragType = null; });
+
+        // Initial render
+        resize();
+    </script>
+</body>
+</html>
