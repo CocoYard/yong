@@ -17,6 +17,18 @@
             display: flex; align-items: center; cursor: pointer; font-weight: bold;
         }
         .toggle-container input { cursor: pointer; margin-right: 8px; width: 16px; height: 16px; }
+        .weight-container {
+            margin-top: 12px; padding-top: 12px; border-top: 1px solid #ddd; font-weight: bold;
+        }
+        .weight-container input {
+            padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+        }
+        .weight-container button {
+            padding: 5px 12px; border: none; border-radius: 4px; background: #2980b9;
+            color: #fff; cursor: pointer; font-size: 14px;
+        }
+        .weight-container button:hover { background: #2471a3; }
+        .weight-container span { display: block; margin-top: 8px; font-weight: normal; }
     </style>
 </head>
 <body>
@@ -26,6 +38,7 @@
         - <strong>Move position</strong>: drag the circle center<br>
         - <strong>Adjust radius</strong>: drag the circle edge<br>
         - <strong>Delete point</strong>: Shift + click on the circle<br>
+        - <strong>Pan view</strong>: drag on empty space<br>
         <br>
         <span style="color: #666; font-size: 12px;">Note: dashed circles represent Hidden Points</span>
 
@@ -38,6 +51,19 @@
             <input type="checkbox" id="toggleSphere">
             Show Power Spheres (orthogonal circles)
         </label>
+
+        <div class="weight-container">
+            <strong>Set all weights:</strong>
+            <div style="display: flex; align-items: center; margin-top: 8px;">
+                <input type="number" id="weightInput" value="0" min="0" step="10" style="width: 70px; margin-right: 8px;">
+                <button id="setWeightBtn">Apply</button>
+            </div>
+            <span style="color: #666; font-size: 12px;">Tip: set every weight to the same value (e.g. 0) to get the plain Voronoi diagram.</span>
+        </div>
+
+        <div class="weight-container">
+            <button id="resetViewBtn">Reset view</button>
+        </div>
     </div>
     <canvas id="canvas"></canvas>
 
@@ -58,6 +84,16 @@
             render();
         });
 
+        // Set every circle's weight (radius) to the same value.
+        // Equal weights make the power diagram collapse to a plain Voronoi diagram;
+        // a weight of 0 shrinks all circles to points (also Voronoi).
+        document.getElementById('setWeightBtn').addEventListener('click', () => {
+            let w = parseFloat(document.getElementById('weightInput').value);
+            if (isNaN(w) || w < 0) w = 0;
+            points.forEach((p) => { p.r = w; });
+            render();
+        });
+
         let points = [
             {x: 300, y: 300, r: 80, isHidden: false},
             {x: 500, y: 300, r: 80, isHidden: false},
@@ -66,7 +102,26 @@
         ];
 
         let draggingPoint = null;
-        let dragType = null; 
+        let dragType = null;
+        // Grab offsets so dragging uses relative motion (no jump to cursor)
+        let grabOffset = { x: 0, y: 0 }; // center drag: circle.center - mouse
+        let grabRadiusOffset = 0;        // radius drag: circle.r - mouse-to-center dist
+
+        // View panning: panX/panY translate world coordinates to screen
+        let panX = 0, panY = 0;
+        let isPanning = false, panMoved = false;
+        let panStartScreen = null, panStartOffset = null, pendingAdd = null;
+
+        document.getElementById('resetViewBtn').addEventListener('click', () => {
+            panX = 0; panY = 0;
+            render();
+        });
+
+        // Convert a mouse event to world coordinates (undo the pan offset)
+        function getWorld(e) {
+            const rect = canvas.getBoundingClientRect();
+            return { x: e.clientX - rect.left - panX, y: e.clientY - rect.top - panY };
+        }
 
         // Core logic to fix blurriness on HiDPI screens
         function resize() {
@@ -214,6 +269,8 @@
 
         function render() {
             ctx.clearRect(0, 0, width, height);
+            ctx.save();
+            ctx.translate(panX, panY); // apply view panning
             let cells = computePowerDiagram();
 
             // 1. Draw power cells
@@ -300,15 +357,15 @@
                 }
             });
             ctx.setLineDash([]);
+            ctx.restore();
         }
 
         canvas.addEventListener('mousedown', (e) => {
             // Don't add a point when clicking on the UI panel
-            if(e.target.closest('#ui')) return; 
+            if(e.target.closest('#ui')) return;
 
-            const rect = canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
+            const w = getWorld(e);
+            const mouseX = w.x, mouseY = w.y;
 
             // Shift + click deletes the topmost circle under the cursor
             // (Ctrl/Cmd are avoided: macOS turns Ctrl+click into a right-click)
@@ -325,49 +382,93 @@
                 return; // modifier held but no circle hit — do nothing (don't add)
             }
 
+            // 1) Radius edge (resize) — topmost circle whose edge is near the cursor.
             for (let i = points.length - 1; i >= 0; i--) {
                 let p = points[i];
                 let dist = Math.hypot(mouseX - p.x, mouseY - p.y);
                 if (Math.abs(dist - p.r) < 8) {
-                    draggingPoint = p; dragType = 'radius'; return;
-                } else if (dist < p.r) {
-                    draggingPoint = p; dragType = 'center'; return;
+                    draggingPoint = p; dragType = 'radius';
+                    grabRadiusOffset = p.r - dist; // keep radius stable relative to grab
+                    return;
                 }
             }
-            points.push({x: mouseX, y: mouseY, r: 40, isHidden: false});
-            render();
+
+            // 2) Move — among all circles containing the cursor, pick the one whose
+            //    CENTER is closest, so overlapping circles disambiguate sensibly.
+            let best = null, bestDist = Infinity;
+            for (let p of points) {
+                let dist = Math.hypot(mouseX - p.x, mouseY - p.y);
+                if (dist < p.r && dist < bestDist) { best = p; bestDist = dist; }
+            }
+            if (best) {
+                draggingPoint = best; dragType = 'center';
+                grabOffset = { x: best.x - mouseX, y: best.y - mouseY };
+                return;
+            }
+
+            // Empty space: begin a pan. If the mouse doesn't move, mouseup treats
+            // it as a click and adds a point at this world position instead.
+            isPanning = true;
+            panMoved = false;
+            panStartScreen = { x: e.clientX, y: e.clientY };
+            panStartOffset = { x: panX, y: panY };
+            pendingAdd = { x: mouseX, y: mouseY };
+            canvas.style.cursor = 'grabbing';
         });
 
         canvas.addEventListener('mousemove', (e) => {
+            // Panning the whole view
+            if (isPanning) {
+                const dx = e.clientX - panStartScreen.x;
+                const dy = e.clientY - panStartScreen.y;
+                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) panMoved = true;
+                panX = panStartOffset.x + dx;
+                panY = panStartOffset.y + dy;
+                canvas.style.cursor = 'grabbing';
+                render();
+                return;
+            }
+
             if(e.target.closest('#ui')) {
                 canvas.style.cursor = 'default';
                 return;
             }
 
             if (!draggingPoint) {
-                const rect = canvas.getBoundingClientRect();
-                const mouseX = e.clientX - rect.left;
-                const mouseY = e.clientY - rect.top;
-                let cursor = 'default';
+                const w = getWorld(e);
+                let cursor = 'grab'; // empty space is pannable
                 for (let p of points) {
-                    let dist = Math.hypot(mouseX - p.x, mouseY - p.y);
+                    let dist = Math.hypot(w.x - p.x, w.y - p.y);
                     if (Math.abs(dist - p.r) < 8) { cursor = 'ew-resize'; break; }
                     else if (dist < p.r) { cursor = 'move'; break; }
                 }
                 canvas.style.cursor = cursor;
                 return;
             }
-            const rect = canvas.getBoundingClientRect();
+            const w = getWorld(e);
             if (dragType === 'center') {
-                draggingPoint.x = e.clientX - rect.left;
-                draggingPoint.y = e.clientY - rect.top;
+                // Move by relative offset captured at grab time (no jump)
+                draggingPoint.x = w.x + grabOffset.x;
+                draggingPoint.y = w.y + grabOffset.y;
             } else if (dragType === 'radius') {
-                draggingPoint.r = Math.max(5, Math.hypot(e.clientX - rect.left - draggingPoint.x, e.clientY - rect.top - draggingPoint.y));
+                let d = Math.hypot(w.x - draggingPoint.x, w.y - draggingPoint.y);
+                draggingPoint.r = Math.max(5, d + grabRadiusOffset);
             }
             render();
         });
 
-        window.addEventListener('mouseup', () => { draggingPoint = null; dragType = null; });
+        window.addEventListener('mouseup', () => {
+            if (isPanning) {
+                // A pan with no movement is really a click → add a point
+                if (!panMoved && pendingAdd) {
+                    points.push({x: pendingAdd.x, y: pendingAdd.y, r: 40, isHidden: false});
+                    render();
+                }
+                isPanning = false; panMoved = false; pendingAdd = null;
+                canvas.style.cursor = 'grab';
+            }
+            draggingPoint = null; dragType = null;
+        });
 
         // Initial render
         resize();
