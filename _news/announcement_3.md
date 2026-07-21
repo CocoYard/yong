@@ -1,7 +1,7 @@
 ---
 layout: post
-date: 2022-05-31 07:59:00-0400
+date: 2026-07-19 07:59:00-0400
 inline: true
 ---
 
-Started my career by joining [Elekta](https://www.elekta.com/) as a software engineering summer intern.
+Our paper *RBF your SDF: Radial Basis Function Interpolation of Signed Distance Fields with Implied Tangent Points* has been conditionally accepted to [SIGGRAPH Asia 2026](https://asia.siggraph.org/2026/) — see you in Malaysia!
