@@ -50,9 +50,7 @@
         - title: Course
           contents:
             - CS262 Introduction to Low-Level Programming
-        - title: Involved
-          contents:
-            - C, Linux
+
     - title: Software Engineer, Algorithm development and application
       institution: <a href="https://www.nio.com">NIO, Inc.</a>
       year: May 2024 - May 2025
@@ -86,9 +84,7 @@
         - title: Course
           contents:
             - CSE 332/504N Object-Oriented Software Development Laboratory
-        - title: Involved
-          contents:
-            - C++
+
     - title: Software Engineering Intern
       institution: <a href="https://elekta.com">Elekta, Inc.</a>
       year: May 2022 - Aug. 2022
@@ -142,4 +138,4 @@
 - title: Other Interests
   type: list
   contents:
-    - <u>Hobbies:</u> video gaming, sketching, travel, etc.
+    - <u>Hobbies:</u> video games, sketching, travel

@@ -1,7 +1,7 @@
 ---
 layout: post
-date: 2019-11-10 16:11:00-0400
+date: 2026-05-28 07:59:00-0400
 inline: true
 ---
 
-Won the national second prize in [Contemporary Undergraduate Mathematical Contest in Modeling](http://en.mcm.edu.cn/).
+✨Presented at [Capital Graphics](https://cragl.cs.gmu.edu/capitalgraphics/2026/)
