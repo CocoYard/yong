@@ -93,7 +93,7 @@ and then fading the alpha of the result avoids this.
 Compositing is a post-processing step applied to the rendered image. The render enters on
 the left through the `Render Layers` node and flows through whatever nodes you add into
 `Composite` and `Viewer`. `Composite` is the final result that gets saved; `Viewer` is
-just a convenient preview in the backdrop. To add the nodes we need, right click and pick
+just a convenient preview in the backdrop. To add the nodes we need, first check `Use Nodes`, right click and pick
 `Add → Color → Color Ramp` and `Set Alpha`, then wire them up like this. Dragging the two
 stops on the `Color Ramp` is what controls the falloff --- move them closer together for a
 sharper shadow edge, further apart for a longer fade.
@@ -136,6 +136,52 @@ Prof. Silvia Sellán has written a useful post on the same topic, [Blender
 Course](https://www.silviasellan.com/posts/blender_figure/), and her [template
 file](https://www.silviasellan.com/images/blender-tutorial/template.blend) comes with a set
 of PBR materials.
+
+### One material, many objects?
+
+Assigning the same material to a lot of objects one at a time gets old fast.
+[This video](https://www.youtube.com/watch?v=tcJY2g8DIIw) walks through how to do it in one
+go.
+
+## Point clouds from `.ply` files
+
+Blender does not render a `.ply` point cloud by default, but you can turn it into geometry
+that does show up. Start by clicking the `.ply` object and adding a Geometry Nodes modifier.
+
+<div class="row justify-content-sm-center mt-3">
+    <div class="col-sm-8 mt-3 mt-md-0">
+        {% include figure.html path="assets/img/post/addModifier.png" class="img-fluid rounded z-depth-1" zoomable=true %}
+    </div>
+</div>
+
+Then navigate to the `Geometry Nodes` panel.
+
+<div class="row justify-content-sm-center mt-3">
+    <div class="col-sm-8 mt-3 mt-md-0">
+        {% include figure.html path="assets/img/post/nodes_panel.png" class="img-fluid rounded z-depth-1" zoomable=true %}
+    </div>
+</div>
+
+In the lower half, add and connect two nodes: `Mesh to Points` → `Set Material`. The
+`Radius` value in `Mesh to Points` controls how large each point is.
+
+<div class="row justify-content-sm-center mt-3">
+    <div class="col-sm-4 mt-3 mt-md-0">
+        {% include figure.html path="assets/img/post/nodes.png" class="img-fluid rounded z-depth-1" zoomable=true %}
+    </div>
+    <div class="col-sm-8 mt-3 mt-md-0">
+        {% include figure.html path="assets/img/post/nodesa.png" class="img-fluid rounded z-depth-1" zoomable=true %}
+    </div>
+</div>
+
+To give the point cloud a color, or make it emissive, point the `Set Material` node at a
+material you build in the shader editor. Mine looks like this:
+
+<div class="row justify-content-sm-center mt-3">
+    <div class="col-sm-8 mt-3 mt-md-0">
+        {% include figure.html path="assets/img/post/add_material.png" class="img-fluid rounded z-depth-1" zoomable=true %}
+    </div>
+</div>
 
 ## Scripting
 
