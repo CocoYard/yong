@@ -557,6 +557,13 @@ footer.sticky-bottom {
             border-color: var(--global-theme-color);
           }
         }
+        a.btn.disabled {
+          opacity: 0.4;
+          cursor: default;
+          pointer-events: none;
+          color: var(--global-text-color);
+          border-color: var(--global-text-color);
+        }
       }
       .hidden {
         font-size: 0.875rem;
