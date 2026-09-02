@@ -15,7 +15,7 @@
       description:
         - "Advisor: Prof. Yotam Gingold"
 
-    - title: Master of Science in Computer Science
+    - title: M.S. in Computer Science
       institution: Washington University in St. Louis
       year: 2023
       description:
@@ -30,7 +30,7 @@
             - Mobile Application Development <br>
           "
             
-    - title: Bachelor of Science in Information and Computing Science
+    - title: B.S. in Information and Computing Science
       institution: Shanghai Ocean University, Shanghai, China
       year: 2021
       description:
@@ -43,13 +43,18 @@
 - title: Work Experience
   type: time_table
   contents:
+    - title: Research Assistant
+      institution: <a href="https://gmu.edu">George Mason University</a>
+      year: May 2026 - present
+
     - title: Teaching Assistant
       institution: <a href="https://gmu.edu">George Mason University</a>
-      year: Aug. 2025 - present
+      year: Aug. 2025 - May 2026
       description:
         - title: Course
           contents:
             - CS262 Introduction to Low-Level Programming
+            - CS471 Operating Systems
 
     - title: Software Engineer, Algorithm development and application
       institution: <a href="https://www.nio.com">NIO, Inc.</a>
@@ -57,8 +62,12 @@
       description:
         - title: Contents
           contents: 
-            - Created algorithms for HD map auto-construction, involving geometry/topology processing and reconstruction.
-            - Decreased the occurrences of short link, redundancy, and road disconnection by refactoring intersection-related code.
+            - "Map Data Auto-Generation: Analyzed and implemented algorithms from academic papers to compute map
+              data matching relationships, ensuring adherence to industrial standards. Utilized matching relationships
+              between data sources to merge disparate datasets, streamlining HD map auto-generation processes."
+            - "Intersection Range Identification: Designed and developed algorithms for the automatic detection of
+              intersection ranges, significantly reducing short link issues, redundancy, and road disconnections."
+            - "Promoted within one year."
         - title: Involved
           contents:
             - C++, Linux, Autonomous Driving, HD map
@@ -68,11 +77,15 @@
       description:
         - title: Contents
           contents: 
-            - Developed infrastructure functionalities, curve and surface discretization, bounding box computation, quartic equation solving, and quadtree implementation.
-            - Optimized loop search algorithms and implemented quadtree to achieve over a hundredfold performance improvement in typical applications.
-            - Rewrote and optimized "loop to face" algorithms, achieving over a thousandfold performance enhancement.
-            - Designed efficient analytic intersection algorithms for a line with a cylinder, a cone, or a torus, ensuring high-speed computation with distance tolerance considerations.
-            - Implemented precise geometric intersection algorithms, surpassing industry standards like Parasolid even in complex scenarios.
+            - Implemented a skeletonization algorithm for automatic generation of roofs.
+            - "Developed infrastructure libraries: curve and surface discretization, bounding box computation, quartic
+              equation solver, and Quadtree implementation."
+            - Enhanced the loop search algorithm with caching and Quadtree integration, gaining over 100× speedup, and
+              rewrote the “loop to face” algorithm for a 1000× performance boost.
+            - Designed and implemented efficient analytic intersection algorithms for a line with a cylinder, a cone, and a
+              torus, ensuring high-speed computation with distance tolerance considerations.
+            - Implemented a general geometric intersection algorithm to solve complex curve and surface intersection
+              problems, whose precision surpasses industry standards like Parasolid even in extreme scenarios.
         - title: Involved
           contents:
             - CAD, C++
@@ -94,30 +107,12 @@
           - "Worked on an agent software for radiation therapy, which is used to manage DICOM files. "
           - "Implemented JavaScript to grant the software the ability to visualize DICOM files, to parse DICOM files, to recursively index attributes, to
   query DICOM files, and to upload and to download files."
-          - "Configured and managed a database and a blob storage for users to put and fetch data. Optimized the interaction experience of the UI. Implemented RESTful API according to the design documentation."
+          - "Configured a database and a blob storage for users to put and fetch data. Optimized the interaction experience of the UI. Implemented RESTful API according to the design documentation."
 
       - title: Involved
         contents:
           - JavaScript, Node.js, Azure blob storage, PostgreSQL, Docker
 
-- title: Projects
-  type: time_table
-  contents:
-    - title: <a href="https://github.com/CocoYard/microtubule-tracking">microtubule-tracking</a>
-      year: 2022
-      description: A tool to track microtubules under the microscope.
-    - title: <a href="https://github.com/CocoYard/CSE-503S-Rapid-prototype-development-and-creative-programming">file sharing, chat room, calendar, sync music player</a>
-      year: 2022
-      description: 4 selected full-stack applications from the course <i>CSE503S Rapid prototype development and creative programming </i>.
-    - title: <a href="https://github.com/CocoYard/ConvexHull-ChansAlgorithm">Chan's Algorithm demo</a>
-      year: 2021
-      description: A demo to display the process of the most efficient algorithm to construct convex hull.
-    - title: <a href="https://github.com/cocoyard/412-pacman">Pac-man's AI agent</a>
-      year: 2021
-      description: An AI agent for pac-man to avoid enemies and eat dots, by the class <em>CSE412 Intro to AI</em>.
-    - title: <a href="https://github.com/cocoyard/Ray-Tracing">Ray Tracing</a>
-      year: 2020
-      description: A ray-tracing pipeline to render the scenarios.
 - title: Honors and Awards
   type: time_table
   contents:
@@ -134,6 +129,8 @@
     - title: Computer Graphics
       items: 
         - Geometry Processing
+        - Surface Reconstruction
+        - Geometric Modeling
 
 - title: Other Interests
   type: list
