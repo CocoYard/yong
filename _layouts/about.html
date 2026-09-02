@@ -48,6 +48,14 @@ layout: default
             <!-- Selected papers -->
             {%- include selected_papers.html %}
           {%- endif %}
+          {% if page.tools -%}
+            <!-- Tools & demos -->
+            {%- include tools.html %}
+          {%- endif %}
+          {% if page.visitor_map -%}
+            <!-- Visitor map -->
+            {%- include visitor_map.html %}
+          {%- endif %}
           {%- if page.social %}
           <!-- Social -->
           <div class="social">
