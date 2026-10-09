@@ -5,7 +5,8 @@
     <title>Power Diagram & Regular Triangulation</title>
     <style>
         body { margin: 0; overflow: hidden; background: #f0f0f0; user-select: none; }
-        canvas { display: block; }
+        canvas { display: block; cursor: grab; touch-action: none; }
+        canvas.panning { cursor: grabbing; }
         #ui {
             position: absolute; top: 15px; left: 15px; background: rgba(255,255,255,0.9);
             padding: 15px; font-family: sans-serif; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
@@ -29,16 +30,25 @@
         }
         .weight-container button:hover { background: #2471a3; }
         .weight-container span { display: block; margin-top: 8px; font-weight: normal; }
+        .weight-container select {
+            padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; max-width: 170px;
+        }
+        .row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-weight: normal; }
     </style>
 </head>
 <body>
     <div id="ui">
         <strong>Power Diagram Sandbox</strong><br><br>
+        - <strong>Pan</strong>: drag, or two-finger swipe on a trackpad<br>
+        - <strong>Zoom</strong>: mouse wheel / trackpad pinch (touch: pinch)<br>
+        - <strong>Reset view</strong>: double-click (touch: double-tap)<br>
         - <strong>Add point</strong>: click on empty space<br>
-        - <strong>Move position</strong>: drag the circle center<br>
-        - <strong>Adjust radius</strong>: drag the circle edge<br>
+        - <strong>Move point</strong>: drag its center dot<br>
+        - <strong>Adjust radius</strong>: drag the edge or the ■ handle<br>
         - <strong>Delete point</strong>: Shift + click on the circle<br>
-        - <strong>Pan view</strong>: drag on empty space<br>
+        - <strong>Hover</strong>: highlights the cell under the cursor, its circle (green)<br>
+        &nbsp;&nbsp;and its RT neighbors' circles (dashed magenta)<br>
+        <span style="color: #666; font-size: 12px;">With &gt;100 points only the selected circle's edge is draggable;<br>dragging anywhere else pans.</span><br>
         <br>
         <span style="color: #666; font-size: 12px;">Note: red dashed circles represent Hidden Points</span>
 
@@ -59,6 +69,33 @@
                 <button id="setWeightBtn">Apply</button>
             </div>
             <span style="color: #666; font-size: 12px;">Tip: set every weight to the same value (e.g. 0) to get the plain Voronoi diagram.</span>
+        </div>
+
+        <div class="weight-container">
+            <strong>Sample an SVG shape:</strong>
+            <div class="row">
+                <select id="shapeSelect">
+                    <option value="" selected disabled>Choose a shape…</option>
+                    <option value="eiffel">Eiffel</option>
+                    <option value="horse">Horse</option>
+                    <option value="star">Star</option>
+                    <option value="square">Rotated square</option>
+                    <option value="box">Box</option>
+                    <option value="blob">Blob</option>
+                    <option value="ring">Ring</option>
+                    <option value="upload">Upload SVG…</option>
+                </select>
+                <input type="file" id="svgUpload" accept=".svg,image/svg+xml" hidden>
+            </div>
+            <div class="row">
+                Per side:
+                <input type="number" id="sampleCount" value="20" min="2" max="50" step="1" style="width: 60px;">
+                <button id="sampleBtn">Sample</button>
+            </div>
+            <label class="row" style="cursor: pointer;">
+                <input type="checkbox" id="toggleOutline" checked style="margin: 0;"> Show shape outline
+            </label>
+            <span id="sampleInfo" style="color: #666; font-size: 12px;">Grid samples the SDF on [−1,1]²; each point's radius is |SDF|.</span>
         </div>
 
         <div class="weight-container">
@@ -91,6 +128,294 @@
             let w = parseFloat(document.getElementById('weightInput').value);
             if (isNaN(w) || w < 0) w = 0;
             points.forEach((p) => { p.r = w; });
+            invalidate();
+            render();
+        });
+
+
+        // ---------- SVG shape loading (ported from rbf-your-sdf-demo/src/io/svg.ts) ----------
+        // A shape is a set of closed polylines (Float64Array [x0,y0,x1,y1,...]) with the
+        // even-odd rule, normalized to [-0.75, 0.75]^2 (y down, like the canvas).
+        const EXAMPLE_SVGS = {
+            blob: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-100 -100 200 200"><path d="M -60 -20 C -70 -80 10 -90 40 -60 C 70 -30 95 -10 70 30 C 50 70 20 50 0 75 C -30 100 -80 70 -70 30 C -65 10 -55 5 -60 -20 Z"/></svg>`,
+            box: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-100 -100 200 200"><rect x="-60" y="-45" width="120" height="90"/></svg>`,
+            eiffel: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2052 1932"><path fill-rule="evenodd" d="M 1502.0,1900.5 1307.0,1899.5 1286.5,1863.0 1286.5,1834.0 1295.0,1833.5 1298.5,1830.0 1286.5,1777.0 1240.0,1775.5 1227.5,1754.0 1227.5,1731.0 1235.0,1729.5 1236.5,1722.0 1229.5,1686.0 1219.5,1661.0 1187.0,1630.5 1129.0,1594.5 1086.0,1578.5 1033.0,1569.5 993.0,1569.5 930.0,1582.5 871.0,1610.5 834.0,1637.5 812.5,1658.0 798.5,1696.0 794.5,1720.0 795.5,1728.0 803.5,1730.0 803.5,1752.0 791.0,1774.5 743.5,1776.0 730.5,1828.0 734.0,1831.5 743.5,1832.0 742.5,1862.0 722.0,1898.5 526.5,1897.0 527.5,1866.0 562.5,1830.0 769.5,1487.0 755.5,1450.0 756.5,1432.0 801.0,1420.5 804.5,1417.0 847.5,1302.0 906.5,1113.0 908.5,1103.0 894.5,1075.0 894.5,1044.0 917.0,1043.5 921.5,1038.0 951.5,795.0 971.5,556.0 981.5,323.0 977.5,307.0 964.5,287.0 962.5,232.0 972.5,226.0 972.5,173.0 983.5,160.0 993.5,141.0 1000.5,114.0 1002.0,91.5 1038.5,92.0 1039.5,116.0 1046.5,142.0 1066.5,173.0 1066.5,226.0 1075.5,230.0 1073.5,287.0 1063.5,302.0 1057.5,319.0 1065.5,556.0 1082.5,778.0 1112.5,1037.0 1117.0,1043.5 1139.5,1044.0 1139.5,1075.0 1125.5,1104.0 1133.5,1137.0 1165.5,1244.0 1225.5,1414.0 1231.0,1421.5 1275.5,1433.0 1275.5,1453.0 1262.5,1490.0 1467.5,1834.0 1502.5,1870.0 Z M 1104.5,1421.0 1107.5,1417.0 1081.5,1319.0 1054.5,1169.0 1051.0,1165.5 982.0,1165.5 978.5,1169.0 961.5,1272.0 948.5,1330.0 924.5,1417.0 928.0,1420.5 Z"/></svg>`,
+            horse: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 570"><path fill-rule="evenodd" d="M 639.0,533.5 619.0,531.5 616.5,528.0 631.5,491.0 628.5,446.0 616.5,410.0 595.5,377.0 552.0,331.5 548.5,335.0 563.5,369.0 566.5,400.0 583.5,473.0 569.5,493.0 572.5,508.0 569.0,516.5 552.0,517.5 534.5,513.0 554.5,480.0 553.5,442.0 534.5,394.0 500.5,343.0 492.5,323.0 483.0,314.5 472.0,317.5 452.0,332.5 411.0,346.5 335.0,347.5 325.0,350.5 322.5,368.0 331.5,419.0 348.5,466.0 347.5,476.0 337.5,493.0 339.5,509.0 336.5,518.0 308.0,519.5 302.5,517.0 319.5,487.0 319.5,476.0 310.5,433.0 296.0,407.5 292.5,411.0 280.5,456.0 277.5,484.0 258.5,507.0 260.5,520.0 257.5,530.0 247.0,533.5 222.0,532.5 220.5,528.0 223.5,522.0 243.5,495.0 254.5,457.0 259.5,375.0 253.5,335.0 230.5,292.0 219.5,246.0 173.0,169.5 163.0,163.5 127.0,159.5 109.0,153.5 100.0,153.5 81.0,165.5 70.0,165.5 52.5,155.0 50.5,140.0 53.5,131.0 79.5,104.0 81.5,86.0 98.5,71.0 94.5,60.0 97.5,42.0 101.0,40.5 114.0,54.5 122.0,55.5 132.5,51.0 134.5,43.0 142.0,34.5 149.0,36.5 157.0,60.5 183.0,69.5 220.0,90.5 249.0,112.5 312.0,170.5 366.0,201.5 387.0,202.5 424.0,196.5 489.0,176.5 534.0,178.5 555.0,185.5 581.0,201.5 596.5,224.0 601.5,246.0 602.5,283.0 599.5,316.0 609.5,337.0 634.5,359.0 640.5,399.0 663.5,473.0 662.5,483.0 651.5,497.0 654.5,530.0 Z"/></svg>`,
+            ring: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-100 -100 200 200"><path fill-rule="evenodd" d="M -80 0 A 80 80 0 1 0 80 0 A 80 80 0 1 0 -80 0 Z M -35 5 A 35 35 0 1 0 35 5 A 35 35 0 1 0 -35 5 Z"/></svg>`,
+            square: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-100 -100 200 200"><rect x="-55" y="-55" width="110" height="110" transform="rotate(20)"/></svg>`,
+            star: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-100 -100 200 200"><polygon points="0,-90 21,-29 86,-28 34,11 53,73 0,36 -53,73 -34,11 -86,-28 -21,-29"/></svg>`,
+        };
+
+        // Parse a path made only of M/L/H/V/Z commands; returns null if it has curves.
+        function parseStraightPath(d) {
+            const tokens = d.match(/[a-zA-Z]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g);
+            if (!tokens) return [];
+            const loops = [];
+            let cur = [], x = 0, y = 0, sx = 0, sy = 0, cmd = '', i = 0;
+            const num = () => parseFloat(tokens[i++]);
+            const flush = () => { if (cur.length >= 6) loops.push(cur); cur = []; };
+            while (i < tokens.length) {
+                if (/[a-zA-Z]/.test(tokens[i])) cmd = tokens[i++];
+                switch (cmd) {
+                    case 'M': case 'm': {
+                        flush();
+                        const nx = num(), ny = num();
+                        x = cmd === 'm' ? x + nx : nx;
+                        y = cmd === 'm' ? y + ny : ny;
+                        sx = x; sy = y;
+                        cur.push(x, y);
+                        cmd = cmd === 'm' ? 'l' : 'L'; // implicit lineto for following pairs
+                        break;
+                    }
+                    case 'L': x = num(); y = num(); cur.push(x, y); break;
+                    case 'l': x += num(); y += num(); cur.push(x, y); break;
+                    case 'H': x = num(); cur.push(x, y); break;
+                    case 'h': x += num(); cur.push(x, y); break;
+                    case 'V': y = num(); cur.push(x, y); break;
+                    case 'v': y += num(); cur.push(x, y); break;
+                    case 'Z': case 'z': flush(); x = sx; y = sy; cmd = ''; break;
+                    default: return null;
+                }
+                if (Number.isNaN(x) || Number.isNaN(y)) return null;
+            }
+            flush();
+            return loops;
+        }
+
+        // Flatten a curved element by arc length.
+        function sampleGeometry(el, spacing) {
+            const total = el.getTotalLength();
+            if (!(total > 0)) return [];
+            const count = Math.min(20000, Math.max(64, Math.ceil(total / spacing)));
+            const step = total / count;
+            const loops = [];
+            let cur = [], px = NaN, py = NaN;
+            for (let k = 0; k < count; k++) {
+                const p = el.getPointAtLength(k * step);
+                // A moveto has zero length, so a new subpath shows up as a jump between samples.
+                if (cur.length && Math.hypot(p.x - px, p.y - py) > 3 * step) { loops.push(cur); cur = []; }
+                cur.push(p.x, p.y);
+                px = p.x; py = p.y;
+            }
+            loops.push(cur);
+            return loops.filter((L) => L.length >= 6);
+        }
+
+        function ellipseLoop(cx, cy, rx, ry, segs = 256) {
+            const L = [];
+            for (let k = 0; k < segs; k++) {
+                const t = (2 * Math.PI * k) / segs;
+                L.push(cx + rx * Math.cos(t), cy + ry * Math.sin(t));
+            }
+            return L;
+        }
+
+        function attrNum(el, a) { return parseFloat(el.getAttribute(a) ?? '0') || 0; }
+
+        // Remove consecutive duplicate vertices and loops with fewer than 3 vertices.
+        function cleanLoops(loops, eps = 1e-12) {
+            const out = [];
+            for (const L of loops) {
+                const pts = [];
+                for (let i = 0; i < L.length; i += 2) {
+                    const k = pts.length;
+                    if (k >= 2 && Math.hypot(L[i] - pts[k - 2], L[i + 1] - pts[k - 1]) <= eps) continue;
+                    pts.push(L[i], L[i + 1]);
+                }
+                while (pts.length >= 4 && Math.hypot(pts[0] - pts[pts.length - 2], pts[1] - pts[pts.length - 1]) <= eps) pts.length -= 2;
+                if (pts.length >= 6) out.push(Float64Array.from(pts));
+            }
+            return out;
+        }
+
+        // Center the bounding box and scale it to fit [-extent, extent]^2.
+        function normalizeLoops(loops, extent) {
+            let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+            for (const L of loops) for (let i = 0; i < L.length; i += 2) {
+                x0 = Math.min(x0, L[i]); x1 = Math.max(x1, L[i]);
+                y0 = Math.min(y0, L[i + 1]); y1 = Math.max(y1, L[i + 1]);
+            }
+            const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+            const s = (2 * extent) / Math.max(x1 - x0, y1 - y0, 1e-12);
+            return loops.map((L) => L.map((v, i) => (v - (i % 2 ? cy : cx)) * s));
+        }
+
+        function svgToShape(text, extent = 0.75) {
+            const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+            const parsed = doc.documentElement;
+            if (parsed.nodeName !== 'svg') throw new Error('Not an SVG file.');
+
+            // Transforms (getCTM) and flattening need the SVG to be in the live document.
+            const host = document.createElement('div');
+            host.style.cssText = 'position:absolute;left:-100000px;top:0;width:1000px;height:1000px;visibility:hidden;overflow:hidden';
+            const svg = document.importNode(parsed, true);
+            svg.setAttribute('width', '1000');
+            svg.setAttribute('height', '1000');
+            host.appendChild(svg);
+            document.body.appendChild(host);
+
+            try {
+                const els = svg.querySelectorAll('path, polygon, polyline, rect, circle, ellipse');
+                let diag = 0;
+                for (const el of els) {
+                    const b = el.getBBox();
+                    diag = Math.max(diag, Math.hypot(b.width, b.height));
+                }
+                const spacing = Math.max(diag, 1e-9) / 1500;
+                const loops = [];
+                for (const el of els) {
+                    if (el.closest('defs, clipPath, mask, pattern, symbol')) continue;
+                    let local = [];
+                    switch (el.tagName.toLowerCase()) {
+                        case 'polygon':
+                        case 'polyline': {
+                            const pts = (el.getAttribute('points') ?? '').trim().split(/[\s,]+/).map(parseFloat);
+                            local = [pts.filter((v) => !Number.isNaN(v))];
+                            break;
+                        }
+                        case 'rect': {
+                            const x = attrNum(el, 'x'), y = attrNum(el, 'y'), w = attrNum(el, 'width'), h = attrNum(el, 'height');
+                            if (el.getAttribute('rx') || el.getAttribute('ry')) local = sampleGeometry(el, spacing);
+                            else local = [[x, y, x + w, y, x + w, y + h, x, y + h]];
+                            break;
+                        }
+                        case 'circle': {
+                            const r = attrNum(el, 'r');
+                            local = [ellipseLoop(attrNum(el, 'cx'), attrNum(el, 'cy'), r, r)];
+                            break;
+                        }
+                        case 'ellipse':
+                            local = [ellipseLoop(attrNum(el, 'cx'), attrNum(el, 'cy'), attrNum(el, 'rx'), attrNum(el, 'ry'))];
+                            break;
+                        case 'path':
+                            local = parseStraightPath(el.getAttribute('d') ?? '') ?? sampleGeometry(el, spacing);
+                            break;
+                    }
+                    const m = el.getCTM();
+                    for (const L of local) {
+                        if (L.length < 6) continue;
+                        const out = new Float64Array(L.length);
+                        for (let k = 0; k < L.length; k += 2) {
+                            const x = L[k], y = L[k + 1];
+                            out[k] = m ? m.a * x + m.c * y + m.e : x;
+                            out[k + 1] = m ? m.b * x + m.d * y + m.f : y;
+                        }
+                        loops.push(out);
+                    }
+                }
+                const cleaned = cleanLoops(loops);
+                if (cleaned.length === 0) throw new Error('No closed shapes found in the SVG.');
+                return normalizeLoops(cleaned, extent);
+            } finally {
+                host.remove();
+            }
+        }
+
+        // Exact signed distance to the polylines (negative inside, even-odd rule).
+        function signedDistance(loops, px, py) {
+            let best = Infinity, inside = false;
+            for (const L of loops) {
+                const m = L.length / 2;
+                for (let i = 0, j = m - 1; i < m; j = i++) {
+                    const xi = L[2 * i], yi = L[2 * i + 1], xj = L[2 * j], yj = L[2 * j + 1];
+                    const ex = xi - xj, ey = yi - yj;
+                    const len2 = ex * ex + ey * ey;
+                    let t = len2 > 0 ? ((px - xj) * ex + (py - yj) * ey) / len2 : 0;
+                    t = t < 0 ? 0 : t > 1 ? 1 : t;
+                    const dx = px - (xj + t * ex), dy = py - (yj + t * ey);
+                    best = Math.min(best, dx * dx + dy * dy);
+                    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+                }
+            }
+            const d = Math.sqrt(best);
+            return inside ? -d : d;
+        }
+
+        // Current shape (normalized loops) and its world-space placement
+        let shapeLoops = null;
+        let shapeView = { cx: 0, cy: 0, s: 1 };
+        let showOutline = true;
+
+        // Sample the SDF on an n x n grid of cell centers over [-1,1]^2 and replace the
+        // points: each sample becomes a weighted point whose radius is |SDF|.
+        function sampleShape() {
+            if (!shapeLoops) return;
+            let n = parseInt(document.getElementById('sampleCount').value, 10);
+            if (!(n >= 2)) n = 2;
+            n = Math.min(n, 50);
+            document.getElementById('sampleCount').value = n;
+            panX = 0; panY = 0; zoom = 1;
+            // Center the shape in the free area right of the control panel when there is room
+            const uiRight = document.getElementById('ui').getBoundingClientRect().right;
+            const left = width - uiRight >= 400 ? uiRight : 0;
+            shapeView = { cx: (left + width) / 2, cy: height / 2, s: 0.45 * Math.min(width - left, height) };
+            const { cx, cy, s } = shapeView;
+            points = [];
+            selected = null;
+            for (let j = 0; j < n; j++) {
+                for (let i = 0; i < n; i++) {
+                    const x = -1 + (2 * (i + 0.5)) / n;
+                    const y = -1 + (2 * (j + 0.5)) / n;
+                    const sdf = signedDistance(shapeLoops, x, y);
+                    points.push({ x: cx + x * s, y: cy + y * s, r: Math.abs(sdf) * s, sdf, isHidden: false });
+                }
+            }
+            invalidate();
+            render();
+            const hidden = points.filter((p) => p.isHidden).length;
+            const inside = points.filter((p) => p.sdf < 0).length;
+            document.getElementById('sampleInfo').textContent =
+                `${n}×${n} = ${n * n} samples (${inside} inside), ${hidden} hidden.`;
+        }
+
+        function loadShapeText(text) {
+            try {
+                shapeLoops = svgToShape(text);
+                sampleShape();
+            } catch (err) {
+                document.getElementById('sampleInfo').textContent = 'Error: ' + (err.message || err);
+            }
+        }
+
+        const shapeSelect = document.getElementById('shapeSelect');
+        const svgUpload = document.getElementById('svgUpload');
+        const uploadedSvgs = new Map();
+        let lastShapeValue = '';
+        shapeSelect.addEventListener('change', () => {
+            const v = shapeSelect.value;
+            if (v === 'upload') {
+                shapeSelect.value = lastShapeValue;
+                svgUpload.click();
+                return;
+            }
+            lastShapeValue = v;
+            loadShapeText(EXAMPLE_SVGS[v] ?? uploadedSvgs.get(v));
+        });
+        svgUpload.addEventListener('change', async () => {
+            const file = svgUpload.files?.[0];
+            if (!file) return;
+            const key = `uploaded:${uploadedSvgs.size}`;
+            uploadedSvgs.set(key, await file.text());
+            const opt = new Option(`Uploaded: ${file.name}`, key);
+            shapeSelect.insertBefore(opt, shapeSelect.querySelector('option[value=upload]'));
+            shapeSelect.value = lastShapeValue = key;
+            svgUpload.value = '';
+            loadShapeText(uploadedSvgs.get(key));
+        });
+        document.getElementById('sampleBtn').addEventListener('click', () => {
+            if (!shapeLoops) {
+                // One click with nothing loaded yet: use the first example
+                shapeSelect.value = lastShapeValue = 'eiffel';
+                loadShapeText(EXAMPLE_SVGS.eiffel);
+            } else {
+                sampleShape();
+            }
+        });
+        document.getElementById('sampleCount').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') document.getElementById('sampleBtn').click();
+        });
+        document.getElementById('toggleOutline').addEventListener('change', (e) => {
+            showOutline = e.target.checked;
             render();
         });
 
@@ -101,31 +426,42 @@
             {x: 400, y: 350, r: 40, isHidden: false} 
         ];
 
-        let draggingPoint = null;
-        let dragType = null;
-        // Grab offsets so dragging uses relative motion (no jump to cursor)
-        let grabOffset = { x: 0, y: 0 }; // center drag: circle.center - mouse
-        let grabRadiusOffset = 0;        // radius drag: circle.r - mouse-to-center dist
+        // View transform: screen = world * zoom + pan
+        let panX = 0, panY = 0, zoom = 1;
+        let dpr = 1;
 
-        // View panning: panX/panY translate world coordinates to screen
-        let panX = 0, panY = 0;
-        let isPanning = false, panMoved = false;
-        let panStartScreen = null, panStartOffset = null, pendingAdd = null;
+        function resetView() {
+            panX = 0; panY = 0; zoom = 1;
+            requestRender();
+        }
+        document.getElementById('resetViewBtn').addEventListener('click', resetView);
 
-        document.getElementById('resetViewBtn').addEventListener('click', () => {
-            panX = 0; panY = 0;
-            render();
-        });
-
-        // Convert a mouse event to world coordinates (undo the pan offset)
-        function getWorld(e) {
+        // Client coordinates -> canvas-local screen pixels
+        function local(e) {
             const rect = canvas.getBoundingClientRect();
-            return { x: e.clientX - rect.left - panX, y: e.clientY - rect.top - panY };
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        }
+        function toWorld(sx, sy) {
+            return { x: (sx - panX) / zoom, y: (sy - panY) / zoom };
+        }
+        // Zoom to `z`, keeping world point w under screen point (sx, sy)
+        function zoomAround(w, sx, sy, z) {
+            zoom = Math.min(200, Math.max(0.05, z));
+            panX = sx - w.x * zoom;
+            panY = sy - w.y * zoom;
+            requestRender();
+        }
+
+        // Coalesce redraws (wheel / pointer events can fire faster than frames)
+        let frame = 0;
+        function requestRender() {
+            if (frame) return;
+            frame = requestAnimationFrame(() => { frame = 0; render(); });
         }
 
         // Core logic to fix blurriness on HiDPI screens
         function resize() {
-            const dpr = window.devicePixelRatio || 1;
+            dpr = window.devicePixelRatio || 1;
             width = window.innerWidth;
             height = window.innerHeight;
 
@@ -139,6 +475,7 @@
 
             // Scale the drawing context so the coordinate system stays unaffected
             ctx.scale(dpr, dpr);
+            invalidate();
             render();
         }
         window.addEventListener('resize', resize);
@@ -202,16 +539,54 @@
 
         function shareEdge(poly1, poly2) {
             if (!poly1 || !poly2 || poly1.length < 3 || poly2.length < 3) return false;
-            let shared = 0;
+            // Count DISTINCT shared vertices: clipping can duplicate a vertex, and
+            // cells touching at a single corner must not count as adjacent.
+            let first = null;
             for (let p1 of poly1) {
                 for (let p2 of poly2) {
                     if (Math.abs(p1.x - p2.x) < 0.1 && Math.abs(p1.y - p2.y) < 0.1) {
-                        shared++;
+                        if (!first) first = p1;
+                        else if (Math.abs(p1.x - first.x) >= 0.1 || Math.abs(p1.y - first.y) >= 0.1) return true;
                         break;
                     }
                 }
             }
-            return shared >= 2;
+            return false;
+        }
+
+        // Cells + adjacency are cached and only recomputed when the points change,
+        // so panning stays smooth even with hundreds of sampled points.
+        let geom = null;
+        function invalidate() { geom = null; }
+
+        function computeGeometry() {
+            const cells = computePowerDiagram();
+            const n = points.length;
+            // Bounding boxes let us skip most pairs before the vertex comparison
+            const boxes = cells.map((poly) => {
+                let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+                for (const v of poly) {
+                    x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x);
+                    y0 = Math.min(y0, v.y); y1 = Math.max(y1, v.y);
+                }
+                return { x0, y0, x1, y1 };
+            });
+            const adj = Array.from({ length: n }, () => new Set());
+            const edges = [];
+            for (let i = 0; i < n; i++) {
+                if (points[i].isHidden) continue;
+                const a = boxes[i];
+                for (let j = i + 1; j < n; j++) {
+                    if (points[j].isHidden) continue;
+                    const b = boxes[j];
+                    if (a.x1 < b.x0 - 0.2 || b.x1 < a.x0 - 0.2 || a.y1 < b.y0 - 0.2 || b.y1 < a.y0 - 0.2) continue;
+                    if (shareEdge(cells[i], cells[j])) {
+                        adj[i].add(j); adj[j].add(i);
+                        edges.push([i, j]);
+                    }
+                }
+            }
+            return { cells, adj, edges, spheres: null };
         }
 
         // Orthogonal circle (power sphere) of three weighted points:
@@ -241,18 +616,14 @@
             return false;
         }
 
-        function computePowerSpheres(cells) {
+        function computePowerSpheres(cells, adj) {
             let spheres = [];
             for (let i = 0; i < points.length; i++) {
-                if (points[i].isHidden) continue;
-                for (let j = i + 1; j < points.length; j++) {
-                    if (points[j].isHidden) continue;
-                    for (let k = j + 1; k < points.length; k++) {
-                        if (points[k].isHidden) continue;
+                for (const j of adj[i]) {
+                    if (j <= i) continue;
+                    for (const k of adj[j]) {
                         // The three cells must be mutually adjacent (a triangle)
-                        if (!shareEdge(cells[i], cells[j])) continue;
-                        if (!shareEdge(cells[i], cells[k])) continue;
-                        if (!shareEdge(cells[j], cells[k])) continue;
+                        if (k <= j || !adj[i].has(k)) continue;
                         let s = orthoCircle(points[i], points[j], points[k]);
                         if (!s) continue;
                         // Keep only triples that actually meet at a common vertex
@@ -268,10 +639,15 @@
         }
 
         function render() {
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, width, height);
             ctx.save();
-            ctx.translate(panX, panY); // apply view panning
-            let cells = computePowerDiagram();
+            ctx.translate(panX, panY); // apply view pan + zoom
+            ctx.scale(zoom, zoom);
+            // u = one screen pixel in world units: keeps strokes/dots constant on screen
+            const u = 1 / zoom;
+            if (!geom) geom = computeGeometry();
+            const cells = geom.cells;
 
             // 1. Draw power cells
             cells.forEach((poly, i) => {
@@ -285,7 +661,7 @@
                     ctx.fillStyle = `hsla(${(i * 137) % 360}, 70%, 85%, 0.6)`;
                     ctx.fill();
                     ctx.strokeStyle = '#ffffff';
-                    ctx.lineWidth = 1.5;
+                    ctx.lineWidth = 1.5 * u;
                     ctx.stroke();
                 }
             });
@@ -293,29 +669,24 @@
             // 2. Draw the regular triangulation (gated by the toggle)
             if (showRT) {
                 ctx.beginPath();
-                for (let i = 0; i < points.length; i++) {
-                    if (points[i].isHidden) continue;
-                    for (let j = i + 1; j < points.length; j++) {
-                        if (points[j].isHidden) continue;
-                        if (shareEdge(cells[i], cells[j])) {
-                            ctx.moveTo(points[i].x, points[i].y);
-                            ctx.lineTo(points[j].x, points[j].y);
-                        }
-                    }
+                for (const [i, j] of geom.edges) {
+                    ctx.moveTo(points[i].x, points[i].y);
+                    ctx.lineTo(points[j].x, points[j].y);
                 }
-                // Switch to bright blue with thicker lines
+                // Switch to bright blue with thicker lines (thinner when dense)
                 ctx.strokeStyle = '#2980b9';
-                ctx.lineWidth = 2.5;
+                ctx.lineWidth = (points.length > 100 ? 1.2 : 2.5) * u;
                 ctx.stroke();
             }
 
             // 2.5 Draw the power spheres (orthogonal circles), gated by the toggle
             if (showSphere) {
-                let spheres = computePowerSpheres(cells);
+                if (!geom.spheres) geom.spheres = computePowerSpheres(cells, geom.adj);
+                let spheres = geom.spheres;
                 spheres.forEach((s) => {
                     // Center of the orthogonal circle = power-diagram vertex
                     ctx.beginPath();
-                    ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
+                    ctx.arc(s.x, s.y, 3 * u, 0, Math.PI * 2);
                     ctx.fillStyle = '#27ae60';
                     ctx.fill();
 
@@ -323,9 +694,9 @@
                     if (s.R2 > 0) {
                         ctx.beginPath();
                         ctx.arc(s.x, s.y, Math.sqrt(s.R2), 0, Math.PI * 2);
-                        ctx.setLineDash([6, 4]);
+                        ctx.setLineDash([6 * u, 4 * u]);
                         ctx.strokeStyle = 'rgba(39, 174, 96, 0.9)';
-                        ctx.lineWidth = 1.5;
+                        ctx.lineWidth = 1.5 * u;
                         ctx.stroke();
                         ctx.setLineDash([]);
                     }
@@ -333,141 +704,353 @@
             }
 
             // 3. Draw the weighted points
+            const dotR = (points.length > 100 ? 2.5 : 4) * u;
             points.forEach((p) => {
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, Math.max(0.1, p.r), 0, Math.PI * 2);
+                // One circle style for every point count: thin, light, unfilled,
+                // so the circles never compete with the ground-truth outline
                 if (p.isHidden) {
-                    ctx.setLineDash([5, 5]);
-                    ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
-                    ctx.lineWidth = 2;
+                    ctx.setLineDash([5 * u, 5 * u]);
+                    ctx.strokeStyle = 'rgba(255, 0, 0, 0.35)';
+                    ctx.lineWidth = 0.75 * u;
                     ctx.stroke();
-                    ctx.fillStyle = 'rgba(255, 0, 0, 0.08)';
-                    ctx.fill();
                 } else {
                     ctx.setLineDash([]);
-                    ctx.strokeStyle = '#333';
-                    ctx.lineWidth = 1.5;
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+                    ctx.lineWidth = 0.75 * u;
                     ctx.stroke();
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
-                    ctx.fill();
                     ctx.beginPath();
-                    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-                    ctx.fillStyle = '#e74c3c';
+                    ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
+                    // Sampled points: inside (SDF < 0) purple, outside red
+                    ctx.fillStyle = p.sdf < 0 ? '#8e44ad' : '#e74c3c';
                     ctx.fill();
                 }
             });
             ctx.setLineDash([]);
+
+            // 3.5 Hovered power cell: the point minimizing the power distance
+            //     |x - p|^2 - r^2 owns the cell under the cursor
+            if (hoverScreen && points.length) {
+                const w = toWorld(hoverScreen.x, hoverScreen.y);
+                let hi = -1, best = Infinity;
+                points.forEach((p, i) => {
+                    const pw = (w.x - p.x) ** 2 + (w.y - p.y) ** 2 - p.r * p.r;
+                    if (pw < best) { best = pw; hi = i; }
+                });
+                const poly = cells[hi], p = points[hi];
+                // RT neighbors of the hovered point: their edges and circles
+                const nbrs = geom.adj[hi] ? [...geom.adj[hi]] : [];
+                if (nbrs.length) {
+                    ctx.beginPath();
+                    for (const j of nbrs) {
+                        ctx.moveTo(p.x, p.y);
+                        ctx.lineTo(points[j].x, points[j].y);
+                    }
+                    ctx.strokeStyle = '#d81b60';
+                    ctx.lineWidth = 2.5 * u;
+                    ctx.stroke();
+                    ctx.beginPath();
+                    for (const j of nbrs) {
+                        const q = points[j];
+                        ctx.moveTo(q.x + Math.max(0.1, q.r), q.y);
+                        ctx.arc(q.x, q.y, Math.max(0.1, q.r), 0, Math.PI * 2);
+                    }
+                    ctx.setLineDash([6 * u, 4 * u]);
+                    ctx.strokeStyle = 'rgba(216, 27, 96, 0.85)';
+                    ctx.lineWidth = 1.75 * u;
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    for (const j of nbrs) {
+                        ctx.beginPath();
+                        ctx.arc(points[j].x, points[j].y, 3.5 * u, 0, Math.PI * 2);
+                        ctx.fillStyle = '#d81b60';
+                        ctx.fill();
+                    }
+                }
+                if (poly && poly.length) {
+                    ctx.beginPath();
+                    ctx.moveTo(poly[0].x, poly[0].y);
+                    for (let j = 1; j < poly.length; j++) ctx.lineTo(poly[j].x, poly[j].y);
+                    ctx.closePath();
+                    ctx.fillStyle = 'rgba(22, 160, 133, 0.12)';
+                    ctx.fill();
+                    ctx.strokeStyle = '#16a085';
+                    ctx.lineWidth = 2 * u;
+                    ctx.stroke();
+                }
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, Math.max(0.1, p.r), 0, Math.PI * 2);
+                ctx.strokeStyle = '#16a085';
+                ctx.lineWidth = 3 * u;
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4 * u, 0, Math.PI * 2);
+                ctx.fillStyle = '#16a085';
+                ctx.fill();
+            }
+
+            // 3.75 Ground-truth SVG outline, drawn on top of the (light) circles
+            if (showOutline && shapeLoops) {
+                const { cx, cy, s } = shapeView;
+                ctx.beginPath();
+                for (const L of shapeLoops) {
+                    ctx.moveTo(cx + L[0] * s, cy + L[1] * s);
+                    for (let k = 2; k < L.length; k += 2) ctx.lineTo(cx + L[k] * s, cy + L[k + 1] * s);
+                    ctx.closePath();
+                }
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2.5 * u;
+                ctx.stroke();
+            }
+
+            // 4. Selected point: orange circle + square radius handle
+            if (selected) {
+                ctx.beginPath();
+                ctx.arc(selected.x, selected.y, Math.max(0.1, selected.r), 0, Math.PI * 2);
+                ctx.strokeStyle = '#f39c12';
+                ctx.lineWidth = 2.5 * u;
+                ctx.stroke();
+                const h = handlePos(selected);
+                ctx.beginPath();
+                ctx.moveTo(selected.x, selected.y);
+                ctx.lineTo(h.x, h.y);
+                ctx.lineWidth = 1 * u;
+                ctx.stroke();
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(h.x - 5 * u, h.y - 5 * u, 10 * u, 10 * u);
+                ctx.lineWidth = 2 * u;
+                ctx.strokeRect(h.x - 5 * u, h.y - 5 * u, 10 * u, 10 * u);
+            }
             ctx.restore();
         }
 
-        canvas.addEventListener('mousedown', (e) => {
-            // Don't add a point when clicking on the UI panel
-            if(e.target.closest('#ui')) return;
+        // ---------- Point editing (no modifier keys) ----------
+        // Hit areas are small, screen-sized handles so that dragging anywhere else
+        // still pans the view, even when hundreds of sampled circles overlap:
+        //  - center dot (8 px)            -> move
+        //  - selected circle's ■ handle   -> resize (sits >= 14 px out, so r ~ 0 works)
+        //  - circle edge (6 px)           -> resize; with many points only the
+        //                                    selected circle's edge, to keep panning free
+        let selected = null;
+        let hoverScreen = null; // last mouse position over the canvas (screen px)
+        let edit = null; // {p, type: 'move' | 'radius', ox, oy | off}
 
-            const w = getWorld(e);
-            const mouseX = w.x, mouseY = w.y;
+        // Radius handle on the right of the circle, at least 14 screen px from the center
+        function handlePos(p) {
+            return { x: p.x + Math.max(p.r, 14 / zoom), y: p.y };
+        }
 
-            // Shift + click deletes the topmost circle under the cursor
-            // (Ctrl/Cmd are avoided: macOS turns Ctrl+click into a right-click)
-            if (e.shiftKey || e.metaKey || e.ctrlKey) {
+        function hitTest(sx, sy, tolScale) {
+            const w = toWorld(sx, sy);
+            const tol = (8 * tolScale) / zoom;
+            if (selected) {
+                const h = handlePos(selected);
+                if (Math.hypot(w.x - h.x, w.y - h.y) < tol) return { p: selected, type: 'radius', w };
+            }
+            let best = null, bestD = tol;
+            for (const p of points) {
+                const d = Math.hypot(w.x - p.x, w.y - p.y);
+                if (d < bestD) { best = p; bestD = d; }
+            }
+            if (best) return { p: best, type: 'move', w };
+            const edgeTol = (6 * tolScale) / zoom;
+            const anyEdge = points.length <= 100;
+            for (let i = points.length - 1; i >= 0; i--) {
+                const p = points[i];
+                if (!anyEdge && p !== selected) continue;
+                if (Math.abs(Math.hypot(w.x - p.x, w.y - p.y) - p.r) < edgeTol) return { p, type: 'radius', w };
+            }
+            return null;
+        }
+
+        function startEdit(hit) {
+            selected = hit.p;
+            const { p, w } = hit;
+            edit = hit.type === 'move'
+                ? { p, type: 'move', ox: p.x - w.x, oy: p.y - w.y }
+                : { p, type: 'radius', off: p.r - Math.hypot(w.x - p.x, w.y - p.y) };
+            requestRender();
+        }
+
+        function updateEdit(sx, sy) {
+            const w = toWorld(sx, sy);
+            const p = edit.p;
+            if (edit.type === 'move') {
+                p.x = w.x + edit.ox;
+                p.y = w.y + edit.oy;
+            } else {
+                p.r = Math.max(0, Math.hypot(w.x - p.x, w.y - p.y) + edit.off);
+            }
+            invalidate();
+            requestRender();
+        }
+
+        // Click: Shift + click deletes the topmost circle under the cursor,
+        // a plain click adds a point (delayed so a double-click can reset instead).
+        let pendingClick = 0;
+        function handleClick(sx, sy, shift, hitTol) {
+            const w = toWorld(sx, sy);
+            if (shift) {
                 for (let i = points.length - 1; i >= 0; i--) {
-                    let p = points[i];
-                    let dist = Math.hypot(mouseX - p.x, mouseY - p.y);
-                    if (dist < p.r || Math.abs(dist - p.r) < 8) {
+                    const p = points[i];
+                    const dist = Math.hypot(w.x - p.x, w.y - p.y);
+                    if (dist < p.r || Math.abs(dist - p.r) < hitTol / zoom) {
+                        if (points[i] === selected) selected = null;
                         points.splice(i, 1);
-                        render();
+                        invalidate();
+                        requestRender();
                         return;
                     }
                 }
-                return; // modifier held but no circle hit — do nothing (don't add)
+                return;
             }
+            clearTimeout(pendingClick);
+            pendingClick = setTimeout(() => {
+                const p = { x: w.x, y: w.y, r: 40 / zoom, isHidden: false };
+                points.push(p);
+                selected = p;
+                invalidate();
+                requestRender();
+            }, 250);
+        }
+        function handleDoubleClick() {
+            clearTimeout(pendingClick); // cancel the point the first click queued
+            resetView();
+        }
 
-            // 1) Radius edge (resize) — topmost circle whose edge is near the cursor.
-            for (let i = points.length - 1; i >= 0; i--) {
-                let p = points[i];
-                let dist = Math.hypot(mouseX - p.x, mouseY - p.y);
-                if (Math.abs(dist - p.r) < 8) {
-                    draggingPoint = p; dragType = 'radius';
-                    grabRadiusOffset = p.r - dist; // keep radius stable relative to grab
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const sp = local(e);
+            // Trackpad two-finger swipe -> pan. Trackpad pinch arrives as ctrl+wheel,
+            // and a mouse wheel scrolls in coarse notches -> both zoom.
+            // Heuristic: trackpads report wheelDeltaY = -3 * deltaY (Chrome/Safari),
+            // and often a nonzero horizontal component.
+            const trackpad = !e.ctrlKey && e.deltaMode === 0 &&
+                (e.deltaX !== 0 || (e.wheelDeltaY !== undefined && e.wheelDeltaY === -3 * e.deltaY));
+            if (trackpad) {
+                panX -= e.deltaX;
+                panY -= e.deltaY;
+                requestRender();
+                return;
+            }
+            const k = e.deltaMode === 1 ? 0.05 : e.ctrlKey ? 0.01 : 0.0015;
+            zoomAround(toWorld(sp.x, sp.y), sp.x, sp.y, zoom * Math.exp(-e.deltaY * k));
+        }, { passive: false });
+
+        // Pointer gestures: one pointer edits a point if it lands on a handle,
+        // otherwise pans (or clicks if it doesn't move); two pointers pinch-zoom
+        // and pan around their midpoint.
+        const active = new Map(); // pointerId -> {x, y}
+        let drag = null;          // single-pointer pan state
+        let pinch = null;         // two-pointer state
+        let lastTap = null;       // for touch double-tap
+
+        function startPinch() {
+            const [a, b] = [...active.values()];
+            const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+            pinch = { w: toWorld(mx, my), dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), zoom };
+        }
+
+        canvas.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* keep events on the canvas when possible */ }
+            const sp = local(e);
+            active.set(e.pointerId, sp);
+            if (active.size === 2) {
+                drag = null;
+                edit = null; // a second finger turns any edit into a pinch
+                startPinch();
+            } else if (active.size === 1) {
+                const hit = e.shiftKey ? null : hitTest(sp.x, sp.y, e.pointerType === 'touch' ? 2 : 1);
+                if (hit) startEdit(hit);
+                else drag = { x: sp.x, y: sp.y, panX, panY, moved: false, t: performance.now() };
+            }
+        });
+
+        canvas.addEventListener('pointermove', (e) => {
+            const sp = local(e);
+            if (e.pointerType === 'mouse') {
+                hoverScreen = sp;
+                requestRender();
+            }
+            if (!active.has(e.pointerId)) {
+                // Mouse hover: show what a drag would do here
+                if (e.pointerType === 'mouse') {
+                    const hit = e.shiftKey ? null : hitTest(sp.x, sp.y, 1);
+                    canvas.style.cursor = !hit ? '' : hit.type === 'move' ? 'move' : 'ew-resize';
+                }
+                return;
+            }
+            active.set(e.pointerId, sp);
+            if (edit) {
+                updateEdit(sp.x, sp.y);
+                return;
+            }
+            if (pinch && active.size >= 2) {
+                const [a, b] = [...active.values()];
+                const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+                const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+                zoomAround(pinch.w, mx, my, (pinch.zoom * dist) / pinch.dist);
+                return;
+            }
+            if (drag) {
+                const dx = sp.x - drag.x, dy = sp.y - drag.y;
+                if (!drag.moved && Math.abs(dx) + Math.abs(dy) > (e.pointerType === 'touch' ? 8 : 3)) {
+                    drag.moved = true;
+                    canvas.classList.add('panning');
+                }
+                if (drag.moved) {
+                    panX = drag.panX + dx;
+                    panY = drag.panY + dy;
+                    requestRender();
+                }
+            }
+        });
+
+        function endPointer(e) {
+            if (!active.has(e.pointerId)) return;
+            const sp = local(e);
+            active.delete(e.pointerId);
+            if (edit) {
+                edit = null; // an edit never counts as a click
+                return;
+            }
+            if (pinch) {
+                // Lifting one finger of a pinch: continue as a pan with the other,
+                // but never treat it as a click
+                pinch = null;
+                if (active.size === 1) {
+                    const q = [...active.values()][0];
+                    drag = { x: q.x, y: q.y, panX, panY, moved: true, t: 0 };
+                }
+                return;
+            }
+            const d = drag;
+            drag = null;
+            canvas.classList.remove('panning');
+            if (!d || d.moved || e.type === 'pointercancel') return;
+            if (e.pointerType === 'touch') {
+                // Touch has no reliable dblclick: detect a double-tap ourselves
+                const now = performance.now();
+                if (lastTap && now - lastTap.t < 320 && Math.hypot(sp.x - lastTap.x, sp.y - lastTap.y) < 30) {
+                    lastTap = null;
+                    handleDoubleClick();
                     return;
                 }
+                lastTap = { x: sp.x, y: sp.y, t: now };
+                handleClick(sp.x, sp.y, false, 16);
+            } else {
+                handleClick(sp.x, sp.y, e.shiftKey, 8);
             }
-
-            // 2) Move — among all circles containing the cursor, pick the one whose
-            //    CENTER is closest, so overlapping circles disambiguate sensibly.
-            let best = null, bestDist = Infinity;
-            for (let p of points) {
-                let dist = Math.hypot(mouseX - p.x, mouseY - p.y);
-                if (dist < p.r && dist < bestDist) { best = p; bestDist = dist; }
-            }
-            if (best) {
-                draggingPoint = best; dragType = 'center';
-                grabOffset = { x: best.x - mouseX, y: best.y - mouseY };
-                return;
-            }
-
-            // Empty space: begin a pan. If the mouse doesn't move, mouseup treats
-            // it as a click and adds a point at this world position instead.
-            isPanning = true;
-            panMoved = false;
-            panStartScreen = { x: e.clientX, y: e.clientY };
-            panStartOffset = { x: panX, y: panY };
-            pendingAdd = { x: mouseX, y: mouseY };
-            canvas.style.cursor = 'grabbing';
+        }
+        canvas.addEventListener('pointerup', endPointer);
+        canvas.addEventListener('pointerleave', () => {
+            if (hoverScreen) { hoverScreen = null; requestRender(); }
         });
-
-        canvas.addEventListener('mousemove', (e) => {
-            // Panning the whole view
-            if (isPanning) {
-                const dx = e.clientX - panStartScreen.x;
-                const dy = e.clientY - panStartScreen.y;
-                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) panMoved = true;
-                panX = panStartOffset.x + dx;
-                panY = panStartOffset.y + dy;
-                canvas.style.cursor = 'grabbing';
-                render();
-                return;
-            }
-
-            if(e.target.closest('#ui')) {
-                canvas.style.cursor = 'default';
-                return;
-            }
-
-            if (!draggingPoint) {
-                const w = getWorld(e);
-                let cursor = 'grab'; // empty space is pannable
-                for (let p of points) {
-                    let dist = Math.hypot(w.x - p.x, w.y - p.y);
-                    if (Math.abs(dist - p.r) < 8) { cursor = 'ew-resize'; break; }
-                    else if (dist < p.r) { cursor = 'move'; break; }
-                }
-                canvas.style.cursor = cursor;
-                return;
-            }
-            const w = getWorld(e);
-            if (dragType === 'center') {
-                // Move by relative offset captured at grab time (no jump)
-                draggingPoint.x = w.x + grabOffset.x;
-                draggingPoint.y = w.y + grabOffset.y;
-            } else if (dragType === 'radius') {
-                let d = Math.hypot(w.x - draggingPoint.x, w.y - draggingPoint.y);
-                draggingPoint.r = Math.max(5, d + grabRadiusOffset);
-            }
-            render();
-        });
-
-        window.addEventListener('mouseup', () => {
-            if (isPanning) {
-                // A pan with no movement is really a click → add a point
-                if (!panMoved && pendingAdd) {
-                    points.push({x: pendingAdd.x, y: pendingAdd.y, r: 40, isHidden: false});
-                    render();
-                }
-                isPanning = false; panMoved = false; pendingAdd = null;
-                canvas.style.cursor = 'grab';
-            }
-            draggingPoint = null; dragType = null;
+        canvas.addEventListener('pointercancel', endPointer);
+        canvas.addEventListener('dblclick', (e) => {
+            if (!e.shiftKey) handleDoubleClick();
         });
 
         // Initial render
