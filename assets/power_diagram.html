@@ -33,73 +33,91 @@
         .weight-container select {
             padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; max-width: 170px;
         }
+        #uiHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        #uiToggle {
+            border: none; background: none; cursor: pointer; font-size: 16px; line-height: 1;
+            padding: 2px 6px; border-radius: 4px; color: #555;
+        }
+        #uiToggle:hover { background: #e6e6e6; }
         .row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-weight: normal; }
     </style>
 </head>
 <body>
     <div id="ui">
-        <strong>Power Diagram Sandbox</strong><br><br>
-        - <strong>Pan</strong>: drag, or two-finger swipe on a trackpad<br>
-        - <strong>Zoom</strong>: mouse wheel / trackpad pinch (touch: pinch)<br>
-        - <strong>Reset view</strong>: double-click (touch: double-tap)<br>
-        - <strong>Add point</strong>: click on empty space<br>
-        - <strong>Move point</strong>: drag its center dot<br>
-        - <strong>Adjust radius</strong>: drag the edge or the ■ handle<br>
-        - <strong>Delete point</strong>: Shift + click on the circle<br>
-        - <strong>Hover</strong>: highlights the cell under the cursor, its circle (green)<br>
-        &nbsp;&nbsp;and its RT neighbors' circles (dashed magenta)<br>
-        <span style="color: #666; font-size: 12px;">With &gt;100 points only the selected circle's edge is draggable;<br>dragging anywhere else pans.</span><br>
-        <br>
-        <span style="color: #666; font-size: 12px;">Note: red dashed circles represent Hidden Points</span>
-
-        <label class="toggle-container">
-            <input type="checkbox" id="toggleRT" checked>
-            Show Regular Triangulation
-        </label>
-
-        <label class="toggle-container">
-            <input type="checkbox" id="toggleSphere">
-            Show Power Spheres (orthogonal circles)
-        </label>
-
-        <div class="weight-container">
-            <strong>Set all weights:</strong>
-            <div style="display: flex; align-items: center; margin-top: 8px;">
-                <input type="number" id="weightInput" value="0" min="0" step="10" style="width: 70px; margin-right: 8px;">
-                <button id="setWeightBtn">Apply</button>
-            </div>
-            <span style="color: #666; font-size: 12px;">Tip: set every weight to the same value (e.g. 0) to get the plain Voronoi diagram.</span>
+        <div id="uiHeader">
+            <strong>Power Diagram Sandbox</strong>
+            <button id="uiToggle" title="Collapse panel" aria-expanded="true">▾</button>
         </div>
+        <div id="uiBody">
+            <br>
+            - <strong>Pan</strong>: drag, or two-finger swipe on a trackpad<br>
+            - <strong>Zoom</strong>: mouse wheel / trackpad pinch (touch: pinch)<br>
+            - <strong>Reset view</strong>: double-click (touch: double-tap)<br>
+            - <strong>Add point</strong>: click on empty space<br>
+            - <strong>Move point</strong>: drag its center dot<br>
+            - <strong>Adjust radius</strong>: drag the edge or the ■ handle<br>
+            - <strong>Delete point</strong>: Shift + click on the circle<br>
+            - <strong>Hover</strong>: highlights the cell under the cursor, its circle (green)<br>
+            &nbsp;&nbsp;and its RT neighbors' circles (dashed magenta)<br>
+            <span style="color: #666; font-size: 12px;">With &gt;100 points only the selected circle's edge is draggable;<br>dragging anywhere else pans.</span><br>
+            <br>
+            <span style="color: #666; font-size: 12px;">Note: red dashed circles represent Hidden Points</span>
 
-        <div class="weight-container">
-            <strong>Sample an SVG shape:</strong>
-            <div class="row">
-                <select id="shapeSelect">
-                    <option value="" selected disabled>Choose a shape…</option>
-                    <option value="eiffel">Eiffel</option>
-                    <option value="horse">Horse</option>
-                    <option value="star">Star</option>
-                    <option value="square">Rotated square</option>
-                    <option value="box">Box</option>
-                    <option value="blob">Blob</option>
-                    <option value="ring">Ring</option>
-                    <option value="upload">Upload SVG…</option>
-                </select>
-                <input type="file" id="svgUpload" accept=".svg,image/svg+xml" hidden>
-            </div>
-            <div class="row">
-                Per side:
-                <input type="number" id="sampleCount" value="20" min="2" max="50" step="1" style="width: 60px;">
-                <button id="sampleBtn">Sample</button>
-            </div>
-            <label class="row" style="cursor: pointer;">
-                <input type="checkbox" id="toggleOutline" checked style="margin: 0;"> Show shape outline
+            <label class="toggle-container">
+                <input type="checkbox" id="toggleRT" checked>
+                Show Regular Triangulation
             </label>
-            <span id="sampleInfo" style="color: #666; font-size: 12px;">Grid samples the SDF on [−1,1]²; each point's radius is |SDF|.</span>
-        </div>
 
-        <div class="weight-container">
-            <button id="resetViewBtn">Reset view</button>
+            <label class="toggle-container">
+                <input type="checkbox" id="toggleSphere">
+                Show Power Spheres (orthogonal circles)
+            </label>
+
+            <div class="weight-container">
+                <strong>Set all weights:</strong>
+                <div style="display: flex; align-items: center; margin-top: 8px;">
+                    <input type="number" id="weightInput" value="0" min="0" step="10" style="width: 70px; margin-right: 8px;">
+                    <button id="setWeightBtn">Apply</button>
+                </div>
+                <span style="color: #666; font-size: 12px;">Tip: set every weight to the same value (e.g. 0) to get the plain Voronoi diagram.</span>
+            </div>
+
+            <div class="weight-container">
+                <strong>Sample SDF circles on:</strong>
+                <div class="row">
+                    <select id="shapeSelect">
+                        <option value="" selected disabled>Choose a shape…</option>
+                        <option value="eiffel">Eiffel</option>
+                        <option value="horse">Horse</option>
+                        <option value="star">Star</option>
+                        <option value="square">Rotated square</option>
+                        <option value="box">Box</option>
+                        <option value="blob">Blob</option>
+                        <option value="ring">Ring</option>
+                        <option value="upload">Upload SVG…</option>
+                    </select>
+                    <input type="file" id="svgUpload" accept=".svg,image/svg+xml" hidden>
+                </div>
+                <!-- Collapsed until a shape is chosen -->
+                <div id="shapeOptions" hidden>
+                    <div class="row">
+                        Per side:
+                        <input type="number" id="sampleCount" value="20" min="2" max="50" step="1" style="width: 60px;">
+                        <button id="sampleBtn">Sample</button>
+                    </div>
+                    <label class="row" style="cursor: pointer;">
+                        <input type="checkbox" id="toggleOutline" checked style="margin: 0;"> Show shape outline
+                    </label>
+                    <label class="row" style="cursor: pointer;">
+                        <input type="checkbox" id="toggleContour" style="margin: 0;"> Show power contour
+                    </label>
+                    <span id="sampleInfo" style="color: #666; font-size: 12px;">Grid samples the SDF on [−1,1]²; each point's radius is |SDF|.</span>
+                </div>
+            </div>
+
+            <div class="weight-container">
+                <button id="resetViewBtn">Reset view</button>
+            </div>
         </div>
     </div>
     <canvas id="canvas"></canvas>
@@ -110,6 +128,17 @@
         let width, height;
         let showRT = true;
         let showSphere = false;
+        let showContour = false;
+
+        // Collapse / expand the whole control panel down to its title
+        const uiToggle = document.getElementById('uiToggle');
+        uiToggle.addEventListener('click', () => {
+            const body = document.getElementById('uiBody');
+            body.hidden = !body.hidden;
+            uiToggle.textContent = body.hidden ? '▸' : '▾';
+            uiToggle.title = body.hidden ? 'Expand panel' : 'Collapse panel';
+            uiToggle.setAttribute('aria-expanded', String(!body.hidden));
+        });
 
         // Listen for toggle changes
         document.getElementById('toggleRT').addEventListener('change', (e) => {
@@ -118,6 +147,10 @@
         });
         document.getElementById('toggleSphere').addEventListener('change', (e) => {
             showSphere = e.target.checked;
+            render();
+        });
+        document.getElementById('toggleContour').addEventListener('change', (e) => {
+            showContour = e.target.checked;
             render();
         });
 
@@ -369,6 +402,7 @@
         }
 
         function loadShapeText(text) {
+            document.getElementById('shapeOptions').hidden = false;
             try {
                 shapeLoops = svgToShape(text);
                 sampleShape();
@@ -554,6 +588,34 @@
             return false;
         }
 
+        // The common edge of two adjacent cells, as its two distinct shared vertices
+        function sharedSegment(poly1, poly2) {
+            let a = null;
+            for (let p1 of poly1) {
+                for (let p2 of poly2) {
+                    if (Math.abs(p1.x - p2.x) < 0.1 && Math.abs(p1.y - p2.y) < 0.1) {
+                        if (!a) a = p1;
+                        else if (Math.abs(p1.x - a.x) >= 0.1 || Math.abs(p1.y - a.y) >= 0.1) return [a, p1];
+                        break;
+                    }
+                }
+            }
+            return null;
+        }
+
+        // Power contour: power-diagram edges separating a cell with SDF < 0 from
+        // one with SDF >= 0 (points without an SDF count as outside). Together
+        // they form closed polylines approximating the shape boundary.
+        function computePowerContour(cells, edges) {
+            const segs = [];
+            for (const [i, j] of edges) {
+                if ((points[i].sdf < 0) === (points[j].sdf < 0)) continue;
+                const seg = sharedSegment(cells[i], cells[j]);
+                if (seg) segs.push(seg);
+            }
+            return segs;
+        }
+
         // Cells + adjacency are cached and only recomputed when the points change,
         // so panning stays smooth even with hundreds of sampled points.
         let geom = null;
@@ -586,7 +648,7 @@
                     }
                 }
             }
-            return { cells, adj, edges, spheres: null };
+            return { cells, adj, edges, spheres: null, contour: null };
         }
 
         // Orthogonal circle (power sphere) of three weighted points:
@@ -701,6 +763,23 @@
                         ctx.setLineDash([]);
                     }
                 });
+            }
+
+            // 2.75 Draw the power contour, gated by the toggle
+            if (showContour) {
+                if (!geom.contour) geom.contour = computePowerContour(cells, geom.edges);
+                ctx.beginPath();
+                for (const [a, b] of geom.contour) {
+                    ctx.moveTo(a.x, a.y);
+                    ctx.lineTo(b.x, b.y);
+                }
+                ctx.strokeStyle = '#d35400';
+                ctx.lineWidth = 3.5 * u;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+                ctx.lineCap = 'butt';
+                ctx.lineJoin = 'miter';
             }
 
             // 3. Draw the weighted points
