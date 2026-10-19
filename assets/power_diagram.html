@@ -12,6 +12,7 @@
             padding: 15px; font-family: sans-serif; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             pointer-events: auto; /* Allow clicks on UI elements */
             font-size: 14px; line-height: 1.5; color: #333; z-index: 10;
+            max-height: calc(100vh - 60px); overflow-y: auto; overscroll-behavior: contain;
         }
         .toggle-container {
             margin-top: 12px; padding-top: 12px; border-top: 1px solid #ddd;
@@ -998,15 +999,30 @@
             resetView();
         }
 
+        // Wheel events closer together than this belong to one gesture
+        // (including the trackpad's inertial tail) and keep its classification.
+        const WHEEL_GESTURE_GAP = 200;
+        let wheelGesture = { trackpad: false, t: -Infinity };
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             const sp = local(e);
             // Trackpad two-finger swipe -> pan. Trackpad pinch arrives as ctrl+wheel,
             // and a mouse wheel scrolls in coarse notches -> both zoom.
-            // Heuristic: trackpads report wheelDeltaY = -3 * deltaY (Chrome/Safari),
-            // and often a nonzero horizontal component.
-            const trackpad = !e.ctrlKey && e.deltaMode === 0 &&
-                (e.deltaX !== 0 || (e.wheelDeltaY !== undefined && e.wheelDeltaY === -3 * e.deltaY));
+            // Heuristic: trackpads report wheelDeltaY ≈ -3 * deltaY (Chrome/Safari),
+            // and often a nonzero horizontal component. Chrome's inertial events
+            // carry fractional deltaY with a rounded wheelDeltaY, so allow slack and
+            // let the whole gesture inherit the classification of its first event.
+            let trackpad = false;
+            if (!e.ctrlKey) {
+                if (e.timeStamp - wheelGesture.t < WHEEL_GESTURE_GAP) {
+                    trackpad = wheelGesture.trackpad;
+                } else {
+                    trackpad = e.deltaMode === 0 &&
+                        (e.deltaX !== 0 ||
+                         (e.wheelDeltaY !== undefined && Math.abs(e.wheelDeltaY + 3 * e.deltaY) <= 2));
+                }
+                wheelGesture = { trackpad, t: e.timeStamp };
+            }
             if (trackpad) {
                 panX -= e.deltaX;
                 panY -= e.deltaY;
