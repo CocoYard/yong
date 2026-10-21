@@ -112,6 +112,9 @@
                     <label class="row" style="cursor: pointer;">
                         <input type="checkbox" id="toggleContour" style="margin: 0;"> Show power contour
                     </label>
+                    <label class="row" style="cursor: pointer;">
+                        <input type="checkbox" id="toggleProj" style="margin: 0;"> Add projection points (r = 0, opposite sign)
+                    </label>
                     <span id="sampleInfo" style="color: #666; font-size: 12px;">Grid samples the SDF on [−1,1]²; each point's radius is |SDF|.</span>
                 </div>
             </div>
@@ -365,12 +368,58 @@
             return inside ? -d : d;
         }
 
+        // Closest point on the polylines to (px, py)
+        function closestPoint(loops, px, py) {
+            let best = Infinity, bx = px, by = py;
+            for (const L of loops) {
+                const m = L.length / 2;
+                for (let i = 0, j = m - 1; i < m; j = i++) {
+                    const xi = L[2 * i], yi = L[2 * i + 1], xj = L[2 * j], yj = L[2 * j + 1];
+                    const ex = xi - xj, ey = yi - yj;
+                    const len2 = ex * ex + ey * ey;
+                    let t = len2 > 0 ? ((px - xj) * ex + (py - yj) * ey) / len2 : 0;
+                    t = t < 0 ? 0 : t > 1 ? 1 : t;
+                    const qx = xj + t * ex, qy = yj + t * ey;
+                    const d2 = (px - qx) ** 2 + (py - qy) ** 2;
+                    if (d2 < best) { best = d2; bx = qx; by = qy; }
+                }
+            }
+            return { x: bx, y: by };
+        }
+
+        // Inside/outside label used for coloring and the power contour. Projection
+        // points carry the opposite label of the sample they were projected from.
+        function isInside(p) { return p.proj ? p.inside : p.sdf < 0; }
+
+        // Rebuild the projection points: each SDF sample's closest point on the
+        // shape, added as a zero-radius circle. Coincident projections are merged
+        // (identical sites would produce identical, mutually "adjacent" cells).
+        let showProj = false;
+        function updateProjections() {
+            points = points.filter((p) => !p.proj);
+            if (selected && selected.proj) selected = null;
+            if (!showProj || !shapeLoops) return;
+            const { cx, cy, s } = shapeView;
+            const seen = new Set();
+            const proj = [];
+            for (const p of points) {
+                if (p.sdf === undefined) continue;
+                const q = closestPoint(shapeLoops, (p.x - cx) / s, (p.y - cy) / s);
+                const key = `${Math.round(q.x * 1e6)},${Math.round(q.y * 1e6)}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                proj.push({ x: cx + q.x * s, y: cy + q.y * s, r: 0, proj: true, inside: !(p.sdf < 0), isHidden: false });
+            }
+            points.push(...proj);
+        }
+
         // Current shape (normalized loops) and its world-space placement
         let shapeLoops = null;
         let shapeView = { cx: 0, cy: 0, s: 1 };
         let showOutline = true;
 
-        // Sample the SDF on an n x n grid of cell centers over [-1,1]^2 and replace the
+        // Sample the SDF on an n x n grid over [-1,1]^2 (endpoints included, as in
+        // rbf-your-sdf-demo's samplePositions2D) and replace the
         // points: each sample becomes a weighted point whose radius is |SDF|.
         function sampleShape() {
             if (!shapeLoops) return;
@@ -388,18 +437,26 @@
             selected = null;
             for (let j = 0; j < n; j++) {
                 for (let i = 0; i < n; i++) {
-                    const x = -1 + (2 * (i + 0.5)) / n;
-                    const y = -1 + (2 * (j + 0.5)) / n;
+                    const x = -1 + (2 * i) / (n - 1);
+                    const y = -1 + (2 * j) / (n - 1);
                     const sdf = signedDistance(shapeLoops, x, y);
                     points.push({ x: cx + x * s, y: cy + y * s, r: Math.abs(sdf) * s, sdf, isHidden: false });
                 }
             }
+            updateProjections();
             invalidate();
             render();
+            updateSampleInfo();
+        }
+
+        function updateSampleInfo() {
+            const samples = points.filter((p) => p.sdf !== undefined);
+            const inside = samples.filter((p) => p.sdf < 0).length;
+            const nProj = points.filter((p) => p.proj).length;
             const hidden = points.filter((p) => p.isHidden).length;
-            const inside = points.filter((p) => p.sdf < 0).length;
             document.getElementById('sampleInfo').textContent =
-                `${n}×${n} = ${n * n} samples (${inside} inside), ${hidden} hidden.`;
+                `${samples.length} samples (${inside} inside)` +
+                (nProj ? ` + ${nProj} projections` : '') + `, ${hidden} hidden.`;
         }
 
         function loadShapeText(text) {
@@ -448,6 +505,13 @@
         });
         document.getElementById('sampleCount').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') document.getElementById('sampleBtn').click();
+        });
+        document.getElementById('toggleProj').addEventListener('change', (e) => {
+            showProj = e.target.checked;
+            updateProjections();
+            invalidate();
+            render();
+            updateSampleInfo();
         });
         document.getElementById('toggleOutline').addEventListener('change', (e) => {
             showOutline = e.target.checked;
@@ -610,7 +674,7 @@
         function computePowerContour(cells, edges) {
             const segs = [];
             for (const [i, j] of edges) {
-                if ((points[i].sdf < 0) === (points[j].sdf < 0)) continue;
+                if (isInside(points[i]) === isInside(points[j])) continue;
                 const seg = sharedSegment(cells[i], cells[j]);
                 if (seg) segs.push(seg);
             }
@@ -766,23 +830,6 @@
                 });
             }
 
-            // 2.75 Draw the power contour, gated by the toggle
-            if (showContour) {
-                if (!geom.contour) geom.contour = computePowerContour(cells, geom.edges);
-                ctx.beginPath();
-                for (const [a, b] of geom.contour) {
-                    ctx.moveTo(a.x, a.y);
-                    ctx.lineTo(b.x, b.y);
-                }
-                ctx.strokeStyle = '#d35400';
-                ctx.lineWidth = 3.5 * u;
-                ctx.lineCap = 'round';
-                ctx.lineJoin = 'round';
-                ctx.stroke();
-                ctx.lineCap = 'butt';
-                ctx.lineJoin = 'miter';
-            }
-
             // 3. Draw the weighted points
             const dotR = (points.length > 100 ? 2.5 : 4) * u;
             points.forEach((p) => {
@@ -801,10 +848,23 @@
                     ctx.lineWidth = 0.75 * u;
                     ctx.stroke();
                     ctx.beginPath();
-                    ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
-                    // Sampled points: inside (SDF < 0) purple, outside red
-                    ctx.fillStyle = p.sdf < 0 ? '#8e44ad' : '#e74c3c';
+                    if (p.proj) {
+                        // Projection points: small diamond with a white rim
+                        const d = dotR * 1.1;
+                        ctx.moveTo(p.x, p.y - d); ctx.lineTo(p.x + d, p.y);
+                        ctx.lineTo(p.x, p.y + d); ctx.lineTo(p.x - d, p.y);
+                        ctx.closePath();
+                    } else {
+                        ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
+                    }
+                    // Inside (SDF < 0) purple, outside red
+                    ctx.fillStyle = isInside(p) ? '#8e44ad' : '#e74c3c';
                     ctx.fill();
+                    if (p.proj) {
+                        ctx.strokeStyle = '#fff';
+                        ctx.lineWidth = 1 * u;
+                        ctx.stroke();
+                    }
                 }
             });
             ctx.setLineDash([]);
@@ -882,6 +942,23 @@
                 ctx.strokeStyle = '#000';
                 ctx.lineWidth = 2.5 * u;
                 ctx.stroke();
+            }
+
+            // 3.8 Draw the power contour on top of the outline, gated by the toggle
+            if (showContour) {
+                if (!geom.contour) geom.contour = computePowerContour(cells, geom.edges);
+                ctx.beginPath();
+                for (const [a, b] of geom.contour) {
+                    ctx.moveTo(a.x, a.y);
+                    ctx.lineTo(b.x, b.y);
+                }
+                ctx.strokeStyle = '#d35400';
+                ctx.lineWidth = 3.5 * u;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+                ctx.lineCap = 'butt';
+                ctx.lineJoin = 'miter';
             }
 
             // 4. Selected point: orange circle + square radius handle
