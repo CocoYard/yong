@@ -30,6 +30,7 @@
             color: #fff; cursor: pointer; font-size: 14px;
         }
         .weight-container button:hover { background: #2471a3; }
+        .weight-container button:disabled { background: #aab7c4; cursor: default; }
         .weight-container span { display: block; margin-top: 8px; font-weight: normal; }
         .weight-container select {
             padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; max-width: 170px;
@@ -120,6 +121,8 @@
             </div>
 
             <div class="weight-container">
+                <button id="undoBtn" title="Undo (Ctrl/Cmd + Z)" disabled>Undo</button>
+                <button id="redoBtn" title="Redo (Ctrl/Cmd + Shift + Z)" disabled>Redo</button>
                 <button id="resetViewBtn">Reset view</button>
             </div>
         </div>
@@ -164,6 +167,7 @@
         document.getElementById('setWeightBtn').addEventListener('click', () => {
             let w = parseFloat(document.getElementById('weightInput').value);
             if (isNaN(w) || w < 0) w = 0;
+            pushHistory();
             points.forEach((p) => { p.r = w; });
             invalidate();
             render();
@@ -460,6 +464,7 @@
         }
 
         function loadShapeText(text) {
+            pushHistory();
             document.getElementById('shapeOptions').hidden = false;
             try {
                 shapeLoops = svgToShape(text);
@@ -500,6 +505,7 @@
                 shapeSelect.value = lastShapeValue = 'eiffel';
                 loadShapeText(EXAMPLE_SVGS.eiffel);
             } else {
+                pushHistory();
                 sampleShape();
             }
         });
@@ -507,6 +513,7 @@
             if (e.key === 'Enter') document.getElementById('sampleBtn').click();
         });
         document.getElementById('toggleProj').addEventListener('change', (e) => {
+            pushHistory();
             showProj = e.target.checked;
             updateProjections();
             invalidate();
@@ -534,6 +541,69 @@
             requestRender();
         }
         document.getElementById('resetViewBtn').addEventListener('click', resetView);
+
+        // ---------- Undo / redo ----------
+        // Snapshots of everything an edit can change: the points (deep-copied), the
+        // loaded shape, and the projection toggle. Push one *before* each edit;
+        // a new edit discards the redo stack.
+        const undoStack = [];
+        const redoStack = [];
+        const HISTORY_MAX = 100;
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
+        function snapshot() {
+            return {
+                points: points.map((p) => ({ ...p })),
+                selected: points.indexOf(selected),
+                shapeLoops, shapeView, showProj, shapeValue: lastShapeValue,
+            };
+        }
+        function updateHistoryButtons() {
+            undoBtn.disabled = undoStack.length === 0;
+            redoBtn.disabled = redoStack.length === 0;
+        }
+        function pushHistory() {
+            undoStack.push(snapshot());
+            if (undoStack.length > HISTORY_MAX) undoStack.shift();
+            redoStack.length = 0;
+            updateHistoryButtons();
+        }
+        function restore(snap) {
+            edit = null;
+            points = snap.points;
+            selected = snap.selected >= 0 ? points[snap.selected] : null;
+            shapeLoops = snap.shapeLoops;
+            shapeView = snap.shapeView;
+            showProj = snap.showProj;
+            document.getElementById('toggleProj').checked = showProj;
+            shapeSelect.value = lastShapeValue = snap.shapeValue;
+            document.getElementById('shapeOptions').hidden = !shapeLoops;
+            invalidate();
+            render();
+            if (shapeLoops) updateSampleInfo();
+        }
+        // Move one step from `from` to `to`, saving the current state on `to`
+        function step(from, to) {
+            if (!from.length) return;
+            to.push(snapshot());
+            restore(from.pop());
+            updateHistoryButtons();
+        }
+        const undo = () => step(undoStack, redoStack);
+        const redo = () => step(redoStack, undoStack);
+        undoBtn.addEventListener('click', undo);
+        redoBtn.addEventListener('click', redo);
+        // Undo: Cmd/Ctrl+Z. Redo: Cmd/Ctrl+Shift+Z or Ctrl+Y.
+        window.addEventListener('keydown', (e) => {
+            if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+            const k = e.key.toLowerCase();
+            const action = k === 'z' ? (e.shiftKey ? redo : undo) : k === 'y' && !e.shiftKey ? redo : null;
+            if (!action) return;
+            // Leave text fields their own undo
+            if (e.target.closest('input[type=number], input[type=text], textarea')) return;
+            e.preventDefault();
+            action();
+        });
 
         // Client coordinates -> canvas-local screen pixels
         function local(e) {
@@ -1033,6 +1103,8 @@
         function updateEdit(sx, sy) {
             const w = toWorld(sx, sy);
             const p = edit.p;
+            // Record the state once per drag, and only if it actually changes something
+            if (!edit.recorded) { pushHistory(); edit.recorded = true; }
             if (edit.type === 'move') {
                 p.x = w.x + edit.ox;
                 p.y = w.y + edit.oy;
@@ -1053,6 +1125,7 @@
                     const p = points[i];
                     const dist = Math.hypot(w.x - p.x, w.y - p.y);
                     if (dist < p.r || Math.abs(dist - p.r) < hitTol / zoom) {
+                        pushHistory();
                         if (points[i] === selected) selected = null;
                         points.splice(i, 1);
                         invalidate();
@@ -1065,6 +1138,7 @@
             clearTimeout(pendingClick);
             pendingClick = setTimeout(() => {
                 const p = { x: w.x, y: w.y, r: 40 / zoom, isHidden: false };
+                pushHistory();
                 points.push(p);
                 selected = p;
                 invalidate();
