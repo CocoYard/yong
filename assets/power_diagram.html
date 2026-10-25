@@ -989,8 +989,10 @@
             points.forEach((p) => {
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, Math.max(0.1, p.r), 0, Math.PI * 2);
-                // One circle style for every point count: thin, light, unfilled,
-                // so the circles never compete with the ground-truth outline
+                // Thin, unfilled circles and their center dots colored by side:
+                // inside (SDF < 0) purple, outside green (kept clear of the
+                // orange power contour)
+                const sideColor = isInside(p) ? '#8e44ad' : '#43a047';
                 if (p.isHidden) {
                     ctx.setLineDash([5 * u, 5 * u]);
                     ctx.strokeStyle = 'rgba(255, 0, 0, 0.35)';
@@ -998,7 +1000,7 @@
                     ctx.stroke();
                 } else {
                     ctx.setLineDash([]);
-                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+                    ctx.strokeStyle = sideColor;
                     ctx.lineWidth = 0.75 * u;
                     ctx.stroke();
                     ctx.beginPath();
@@ -1011,8 +1013,7 @@
                     } else {
                         ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
                     }
-                    // Inside (SDF < 0) purple, outside red
-                    ctx.fillStyle = isInside(p) ? '#8e44ad' : '#e74c3c';
+                    ctx.fillStyle = sideColor;
                     ctx.fill();
                     if (p.proj) {
                         ctx.strokeStyle = '#fff';
