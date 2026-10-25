@@ -124,6 +124,9 @@
                         Seed:
                         <input type="number" id="projSeed" value="0" step="1" style="width: 70px;">
                     </div>
+                    <div class="row">
+                        <button id="estimateBtn" title="Run estimate_projections() in assets/experiments.py (needs: python3 assets/estimate_server.py)">Estimate projections</button>
+                    </div>
                     <span id="sampleInfo" style="color: #666; font-size: 12px;">Grid samples the SDF on [−1,1]²; each point's radius is |SDF|.</span>
                 </div>
             </div>
@@ -458,7 +461,8 @@
             const proj = [];
             for (const p of points) {
                 if (p.sdf === undefined) continue;
-                const q = closestPoint(shapeLoops, (p.x - cx) / s, (p.y - cy) / s);
+                // Imported estimate if there is one, otherwise the GT projection
+                const q = p.est ?? closestPoint(shapeLoops, (p.x - cx) / s, (p.y - cy) / s);
                 let x = cx + q.x * s, y = cy + q.y * s;
                 if (sigma > 0) {
                     const vx = x - p.x, vy = y - p.y;
@@ -518,10 +522,12 @@
             const samples = points.filter((p) => p.sdf !== undefined);
             const inside = samples.filter((p) => p.sdf < 0).length;
             const nProj = points.filter((p) => p.proj).length;
+            const nEst = samples.filter((p) => p.est).length;
             const hidden = points.filter((p) => p.isHidden).length;
             document.getElementById('sampleInfo').textContent =
                 `${samples.length} samples (${inside} inside)` +
                 (nProj ? ` + ${nProj} projections` : '') +
+                (nProj && nEst ? ` [${nEst} imported]` : '') +
                 (projFallbacks ? ` (${projFallbacks} kept GT)` : '') + `, ${hidden} hidden.`;
         }
 
@@ -604,6 +610,79 @@
             render();
             updateSampleInfo();
         }
+        // ---------- Python estimate (assets/experiments.py) ----------
+        // "Estimate projections" posts the samples and GT loops to a local Python
+        // server (python3 assets/estimate_server.py), which reloads
+        // experiments.py and returns one entry per sample, in the same order:
+        // [x, y] for an estimate, or null to keep the GT projection.
+        // Coordinates are the normalized [-1,1]^2 frame with y up (rbf-your-sdf-demo).
+        const ESTIMATE_URL = 'http://127.0.0.1:8765/estimate';
+        function sdfSamples() { return points.filter((p) => p.sdf !== undefined); }
+        function estimateRequest(samples) {
+            const { cx, cy, s } = shapeView;
+            return {
+                shape: lastShapeValue,
+                y_up: true,
+                loops: shapeLoops.map((L) => {
+                    const out = [];
+                    for (let k = 0; k < L.length; k += 2) out.push([L[k], -L[k + 1]]);
+                    return out;
+                }),
+                samples: samples.map((p) => ({ x: (p.x - cx) / s, y: -(p.y - cy) / s, sdf: p.sdf })),
+            };
+        }
+        function applyEstimates(samples, proj) {
+            if (!Array.isArray(proj)) throw new Error('missing "projections" array');
+            if (proj.length !== samples.length) {
+                throw new Error(`${proj.length} projections for ${samples.length} samples`);
+            }
+            proj.forEach((q, i) => {
+                if (q !== null && !(Array.isArray(q) && q.length === 2 && q.every(Number.isFinite))) {
+                    throw new Error(`projections[${i}] must be [x, y] or null`);
+                }
+            });
+            pushHistory();
+            // Replace the samples so the undo snapshot keeps the old estimates
+            const fresh = new Map(samples.map((p, i) => [p, {
+                ...p, est: proj[i] ? { x: proj[i][0], y: -proj[i][1] } : undefined,
+            }]));
+            points = points.map((p) => fresh.get(p) ?? p);
+            if (selected) selected = fresh.get(selected) ?? selected;
+            showProj = true;
+            document.getElementById('toggleProj').checked = true;
+            updateProjections();
+            invalidate();
+            render();
+            updateSampleInfo();
+        }
+        const estimateBtn = document.getElementById('estimateBtn');
+        estimateBtn.addEventListener('click', async () => {
+            const info = document.getElementById('sampleInfo');
+            const samples = sdfSamples();
+            estimateBtn.disabled = true;
+            info.textContent = 'Estimating…';
+            try {
+                let res;
+                try {
+                    res = await fetch(ESTIMATE_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(estimateRequest(samples)),
+                    });
+                } catch {
+                    throw new Error('no Python server; run: python3 assets/estimate_server.py');
+                }
+                const text = await res.text();
+                if (!res.ok) throw new Error('Python: ' + text);
+                if (samples.some((p) => !points.includes(p))) throw new Error('samples changed while estimating; try again');
+                applyEstimates(samples, JSON.parse(text).projections);
+            } catch (err) {
+                info.textContent = 'Estimate error: ' + (err.message || err);
+            } finally {
+                estimateBtn.disabled = false;
+            }
+        });
+
         document.getElementById('toggleOutline').addEventListener('change', (e) => {
             showOutline = e.target.checked;
             render();
