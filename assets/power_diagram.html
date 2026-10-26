@@ -114,8 +114,12 @@
                         <input type="checkbox" id="toggleContour" style="margin: 0;"> Show power contour
                     </label>
                     <label class="row" style="cursor: pointer;">
-                        <input type="checkbox" id="toggleProj" style="margin: 0;"> Add projection points (r = 0, opposite sign)
+                        <input type="checkbox" id="toggleGT" style="margin: 0;"> GT projection points
                     </label>
+                    <label class="row" style="cursor: pointer;" title="Runs estimate_projections() in assets/experiments.py (needs: python3 assets/estimate_server.py)">
+                        <input type="checkbox" id="toggleEst" style="margin: 0;"> Estimated projection points
+                    </label>
+                    <span style="color: #666; font-size: 12px; margin-top: 2px;">Projection points: r = 0, opposite sign of their sample; at most one kind at a time.</span>
                     <div class="row">
                         Rotation variance:
                         <input type="number" id="projVar" value="0" min="0" step="0.01" style="width: 70px;"> rad²
@@ -123,9 +127,6 @@
                     <div class="row">
                         Seed:
                         <input type="number" id="projSeed" value="0" step="1" style="width: 70px;">
-                    </div>
-                    <div class="row">
-                        <button id="estimateBtn" title="Run estimate_projections() in assets/experiments.py (needs: python3 assets/estimate_server.py)">Estimate projections</button>
                     </div>
                     <span id="sampleInfo" style="color: #666; font-size: 12px;">Grid samples the SDF on [−1,1]²; each point's radius is |SDF|.</span>
                 </div>
@@ -409,10 +410,10 @@
         // Rebuild the projection points: each SDF sample's closest point on the
         // shape, added as a zero-radius circle. Coincident projections are merged
         // (identical sites would produce identical, mutually "adjacent" cells).
-        let showProj = false;
+        let projMode = 'none';  // 'none' | 'gt' (exact closest point) | 'est' (Python estimate)
         let projVar = 0;        // variance (rad^2) of the random rotation of each projection
         let projSeed = 0;       // RNG seed: the same seed + variance gives the same rotations
-        let projFallbacks = 0;  // projections that kept the GT position after all retries
+        let projFallbacks = 0;  // projections left unrotated after all retries
         const PROJ_RETRIES = 3;
 
         // Seedable PRNG in [0, 1) (mulberry32, as in rbf-your-sdf-demo's sampling.ts)
@@ -443,17 +444,18 @@
         }
 
         // Rebuild the projection points: each SDF sample's closest point on the
-        // shape, added as a zero-radius circle. With projVar > 0 the point is rotated
+        // shape ('gt') or its Python estimate ('est'), added as a zero-radius circle.
+        // With projVar > 0 the point is rotated
         // around its sample's center by an angle ~ N(0, projVar), staying on that
         // circle; a rotation that lands inside another circle is redrawn, up to
-        // PROJ_RETRIES times, before falling back to the GT projection.
+        // PROJ_RETRIES times, before falling back to the unrotated point.
         // Coincident projections are merged (identical sites would produce
         // identical, mutually "adjacent" cells).
         function updateProjections() {
             points = points.filter((p) => !p.proj);
             if (selected && selected.proj) selected = null;
             projFallbacks = 0;
-            if (!showProj || !shapeLoops) return;
+            if (projMode === 'none' || !shapeLoops) return;
             const { cx, cy, s } = shapeView;
             const sigma = Math.sqrt(projVar);
             const rand = mulberry32(projSeed);
@@ -461,8 +463,9 @@
             const proj = [];
             for (const p of points) {
                 if (p.sdf === undefined) continue;
-                // Imported estimate if there is one, otherwise the GT projection
-                const q = p.est ?? closestPoint(shapeLoops, (p.x - cx) / s, (p.y - cy) / s);
+                // est: null = filtered out by Python, undefined = not estimated yet
+                if (projMode === 'est' && !p.est) continue;
+                const q = projMode === 'est' ? p.est : closestPoint(shapeLoops, (p.x - cx) / s, (p.y - cy) / s);
                 let x = cx + q.x * s, y = cy + q.y * s;
                 if (sigma > 0) {
                     const vx = x - p.x, vy = y - p.y;
@@ -516,6 +519,8 @@
             invalidate();
             render();
             updateSampleInfo();
+            // New samples have no estimates yet: fetch them (part of the same undo step)
+            if (projMode === 'est') runEstimate(false);
         }
 
         function updateSampleInfo() {
@@ -523,12 +528,13 @@
             const inside = samples.filter((p) => p.sdf < 0).length;
             const nProj = points.filter((p) => p.proj).length;
             const nEst = samples.filter((p) => p.est).length;
+            const nDropped = samples.filter((p) => p.est === null).length;
             const hidden = points.filter((p) => p.isHidden).length;
             document.getElementById('sampleInfo').textContent =
                 `${samples.length} samples (${inside} inside)` +
                 (nProj ? ` + ${nProj} projections` : '') +
-                (nProj && nEst ? ` [${nEst} imported]` : '') +
-                (projFallbacks ? ` (${projFallbacks} kept GT)` : '') + `, ${hidden} hidden.`;
+                (projMode === 'est' ? ` [${nEst} estimated, ${nDropped} filtered]` : '') +
+                (projFallbacks ? ` (${projFallbacks} unrotated)` : '') + `, ${hidden} hidden.`;
         }
 
         function loadShapeText(text) {
@@ -580,13 +586,26 @@
         document.getElementById('sampleCount').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') document.getElementById('sampleBtn').click();
         });
-        document.getElementById('toggleProj').addEventListener('change', (e) => {
+        // GT and estimated projection points are exclusive; both may be off
+        const toggleGT = document.getElementById('toggleGT');
+        const toggleEst = document.getElementById('toggleEst');
+        function syncProjToggles() {
+            toggleGT.checked = projMode === 'gt';
+            toggleEst.checked = projMode === 'est';
+        }
+        function setProjMode(mode) {
             pushHistory();
-            showProj = e.target.checked;
+            projMode = mode;
+            syncProjToggles();
             updateProjections();
             invalidate();
             render();
             updateSampleInfo();
+        }
+        toggleGT.addEventListener('change', (e) => setProjMode(e.target.checked ? 'gt' : 'none'));
+        toggleEst.addEventListener('change', (e) => {
+            if (e.target.checked) runEstimate(true);
+            else setProjMode('none');
         });
         document.getElementById('projVar').addEventListener('change', (e) => {
             let v = parseFloat(e.target.value);
@@ -603,7 +622,7 @@
             regenerateProjections();
         });
         function regenerateProjections() {
-            if (!showProj) return;
+            if (projMode === 'none') return;
             pushHistory();
             updateProjections();
             invalidate();
@@ -611,10 +630,10 @@
             updateSampleInfo();
         }
         // ---------- Python estimate (assets/experiments.py) ----------
-        // "Estimate projections" posts the samples and GT loops to a local Python
+        // "Estimated projection points" posts the samples and GT loops to a local Python
         // server (python3 assets/estimate_server.py), which reloads
         // experiments.py and returns one entry per sample, in the same order:
-        // [x, y] for an estimate, or null to keep the GT projection.
+        // [x, y] for an estimate, or null to drop that sample's projection point.
         // Coordinates are the normalized [-1,1]^2 frame with y up (rbf-your-sdf-demo).
         const ESTIMATE_URL = 'http://127.0.0.1:8765/estimate';
         function sdfSamples() { return points.filter((p) => p.sdf !== undefined); }
@@ -631,7 +650,7 @@
                 samples: samples.map((p) => ({ x: (p.x - cx) / s, y: -(p.y - cy) / s, sdf: p.sdf })),
             };
         }
-        function applyEstimates(samples, proj) {
+        function applyEstimates(samples, proj, record) {
             if (!Array.isArray(proj)) throw new Error('missing "projections" array');
             if (proj.length !== samples.length) {
                 throw new Error(`${proj.length} projections for ${samples.length} samples`);
@@ -641,25 +660,26 @@
                     throw new Error(`projections[${i}] must be [x, y] or null`);
                 }
             });
-            pushHistory();
+            if (record) pushHistory();
             // Replace the samples so the undo snapshot keeps the old estimates
             const fresh = new Map(samples.map((p, i) => [p, {
-                ...p, est: proj[i] ? { x: proj[i][0], y: -proj[i][1] } : undefined,
+                ...p, est: proj[i] ? { x: proj[i][0], y: -proj[i][1] } : null,
             }]));
             points = points.map((p) => fresh.get(p) ?? p);
             if (selected) selected = fresh.get(selected) ?? selected;
-            showProj = true;
-            document.getElementById('toggleProj').checked = true;
+            projMode = 'est';
+            syncProjToggles();
             updateProjections();
             invalidate();
             render();
             updateSampleInfo();
         }
-        const estimateBtn = document.getElementById('estimateBtn');
-        estimateBtn.addEventListener('click', async () => {
+        // Ask Python for estimates of the current samples and switch to them.
+        // record: push an undo step (false when it completes a resample).
+        async function runEstimate(record) {
             const info = document.getElementById('sampleInfo');
             const samples = sdfSamples();
-            estimateBtn.disabled = true;
+            toggleEst.disabled = true;
             info.textContent = 'Estimating…';
             try {
                 let res;
@@ -675,13 +695,14 @@
                 const text = await res.text();
                 if (!res.ok) throw new Error('Python: ' + text);
                 if (samples.some((p) => !points.includes(p))) throw new Error('samples changed while estimating; try again');
-                applyEstimates(samples, JSON.parse(text).projections);
+                applyEstimates(samples, JSON.parse(text).projections, record);
             } catch (err) {
+                syncProjToggles(); // the checkbox reverts to the current mode
                 info.textContent = 'Estimate error: ' + (err.message || err);
             } finally {
-                estimateBtn.disabled = false;
+                toggleEst.disabled = false;
             }
-        });
+        }
 
         document.getElementById('toggleOutline').addEventListener('change', (e) => {
             showOutline = e.target.checked;
@@ -718,7 +739,7 @@
             return {
                 points: points.map((p) => ({ ...p })),
                 selected: points.indexOf(selected),
-                shapeLoops, shapeView, showProj, shapeValue: lastShapeValue,
+                shapeLoops, shapeView, projMode, shapeValue: lastShapeValue,
             };
         }
         function updateHistoryButtons() {
@@ -737,8 +758,8 @@
             selected = snap.selected >= 0 ? points[snap.selected] : null;
             shapeLoops = snap.shapeLoops;
             shapeView = snap.shapeView;
-            showProj = snap.showProj;
-            document.getElementById('toggleProj').checked = showProj;
+            projMode = snap.projMode;
+            syncProjToggles();
             shapeSelect.value = lastShapeValue = snap.shapeValue;
             document.getElementById('shapeOptions').hidden = !shapeLoops;
             invalidate();
@@ -998,6 +1019,8 @@
             return spheres;
         }
 
+        const sideColorOf = (p) => (isInside(p) ? '#8e44ad' : '#43a047');
+
         function render() {
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, width, height);
@@ -1071,7 +1094,7 @@
                 // Thin, unfilled circles and their center dots colored by side:
                 // inside (SDF < 0) purple, outside green (kept clear of the
                 // orange power contour)
-                const sideColor = isInside(p) ? '#8e44ad' : '#43a047';
+                const sideColor = sideColorOf(p);
                 if (p.isHidden) {
                     ctx.setLineDash([5 * u, 5 * u]);
                     ctx.strokeStyle = 'rgba(255, 0, 0, 0.35)';
@@ -1082,23 +1105,11 @@
                     ctx.strokeStyle = sideColor;
                     ctx.lineWidth = 0.75 * u;
                     ctx.stroke();
+                    if (p.proj) return; // diamond drawn on top in step 3.9
                     ctx.beginPath();
-                    if (p.proj) {
-                        // Projection points: small diamond with a white rim
-                        const d = dotR * 1.1;
-                        ctx.moveTo(p.x, p.y - d); ctx.lineTo(p.x + d, p.y);
-                        ctx.lineTo(p.x, p.y + d); ctx.lineTo(p.x - d, p.y);
-                        ctx.closePath();
-                    } else {
-                        ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
-                    }
+                    ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
                     ctx.fillStyle = sideColor;
                     ctx.fill();
-                    if (p.proj) {
-                        ctx.strokeStyle = '#fff';
-                        ctx.lineWidth = 1 * u;
-                        ctx.stroke();
-                    }
                 }
             });
             ctx.setLineDash([]);
@@ -1194,6 +1205,22 @@
                 ctx.lineCap = 'butt';
                 ctx.lineJoin = 'miter';
             }
+
+            // 3.9 Projection points on top of the outline and contour:
+            //     small diamonds with a white rim, colored by side
+            const d = dotR * 1.1;
+            points.forEach((p) => {
+                if (!p.proj || p.isHidden) return;
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y - d); ctx.lineTo(p.x + d, p.y);
+                ctx.lineTo(p.x, p.y + d); ctx.lineTo(p.x - d, p.y);
+                ctx.closePath();
+                ctx.fillStyle = sideColorOf(p);
+                ctx.fill();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1 * u;
+                ctx.stroke();
+            });
 
             // 4. Selected point: orange circle + square radius handle
             if (selected) {

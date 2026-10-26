@@ -6,7 +6,7 @@ Each POST /estimate reloads experiments.py, so edits to `estimate_projections`
 apply on the next click. Request (y up, normalized [-1, 1]^2):
     {"shape": str, "loops": [[[x, y], ...], ...], "samples": [{"x", "y", "sdf"}, ...]}
 Response: {"projections": [[x, y] or null, ...]}, one per sample; a row of NaNs
-becomes null, which tells the page to keep the GT projection for that sample.
+becomes null, which tells the page to drop that sample's projection point.
 """
 
 import importlib.util
