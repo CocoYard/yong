@@ -4,7 +4,8 @@
 
 Each POST /estimate reloads experiments.py, so edits to `estimate_projections`
 apply on the next click. Request (y up, normalized [-1, 1]^2):
-    {"shape": str, "loops": [[[x, y], ...], ...], "samples": [{"x", "y", "sdf"}, ...]}
+    {"shape": str, "loops": [[[x, y], ...], ...], "samples": [{"x", "y", "sdf"}, ...],
+     "options": {...}}   # passed to estimate_projections as keyword arguments
 Response: {"projections": [[x, y] or null, ...]}, one per sample; a row of NaNs
 becomes null, which tells the page to drop that sample's projection point.
 """
@@ -32,7 +33,8 @@ def load_experiments():
 def estimate(data):
     xy = np.array([[s["x"], s["y"]] for s in data["samples"]], dtype=float).reshape(-1, 2)
     sdf = np.array([s["sdf"] for s in data["samples"]], dtype=float)
-    proj = np.asarray(load_experiments().estimate_projections(xy, sdf, data["loops"]), dtype=float)
+    options = data.get("options", {})
+    proj = np.asarray(load_experiments().estimate_projections(xy, sdf, data["loops"], **options), dtype=float)
     if proj.shape != xy.shape:
         raise ValueError(f"estimate_projections returned shape {proj.shape}, expected {xy.shape}")
     return [None if np.isnan(q).any() else q.tolist() for q in proj]

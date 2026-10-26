@@ -119,6 +119,9 @@
                     <label class="row" style="cursor: pointer;" title="Runs estimate_projections() in assets/experiments.py (needs: python3 assets/estimate_server.py)">
                         <input type="checkbox" id="toggleEst" style="margin: 0;"> Estimated projection points
                     </label>
+                    <label class="row" style="cursor: pointer; margin-left: 22px;" title="Samples without a usable gradient take one solved by a sample whose best neighbor pair included them">
+                        <input type="checkbox" id="toggleInherit" checked style="margin: 0;"> Inherit gradients from neighbors
+                    </label>
                     <span style="color: #666; font-size: 12px; margin-top: 2px;">Projection points: r = 0, opposite sign of their sample; at most one kind at a time.</span>
                     <div class="row">
                         Rotation variance:
@@ -607,6 +610,10 @@
             if (e.target.checked) runEstimate(true);
             else setProjMode('none');
         });
+        // Estimation options: re-estimate right away when estimates are shown
+        document.getElementById('toggleInherit').addEventListener('change', () => {
+            if (projMode === 'est') runEstimate(true);
+        });
         document.getElementById('projVar').addEventListener('change', (e) => {
             let v = parseFloat(e.target.value);
             if (!(v >= 0)) v = 0;
@@ -648,6 +655,8 @@
                     return out;
                 }),
                 samples: samples.map((p) => ({ x: (p.x - cx) / s, y: -(p.y - cy) / s, sdf: p.sdf })),
+                // keyword arguments of estimate_projections()
+                options: { inherit: document.getElementById('toggleInherit').checked },
             };
         }
         function applyEstimates(samples, proj, record) {
@@ -907,31 +916,45 @@
             return false;
         }
 
-        // The common edge of two adjacent cells, as its two distinct shared vertices
-        function sharedSegment(poly1, poly2) {
-            let a = null;
-            for (let p1 of poly1) {
-                for (let p2 of poly2) {
-                    if (Math.abs(p1.x - p2.x) < 0.1 && Math.abs(p1.y - p2.y) < 0.1) {
-                        if (!a) a = p1;
-                        else if (Math.abs(p1.x - a.x) >= 0.1 || Math.abs(p1.y - a.y) >= 0.1) return [a, p1];
-                        break;
-                    }
-                }
-            }
-            return null;
-        }
-
         // Power contour: power-diagram edges separating a cell with SDF < 0 from
         // one with SDF >= 0 (points without an SDF count as outside). Together
         // they form closed polylines approximating the shape boundary.
-        function computePowerContour(cells, edges) {
+        // The cell across each edge is found as the power-nearest point just
+        // outside the edge's midpoint. Matching vertices between cells (or
+        // remembering which bisector cut the edge) is unreliable here: r = 0
+        // projection points sit where several circles touch, so bisectors
+        // coincide, cells degenerate and vertices nearly coincide.
+        function computePowerContour(cells) {
+            const n = points.length;
+            const X = new Float64Array(n), Y = new Float64Array(n), W = new Float64Array(n);
+            points.forEach((p, k) => { X[k] = p.x; Y[k] = p.y; W[k] = p.r * p.r; });
             const segs = [];
-            for (const [i, j] of edges) {
-                if (isInside(points[i]) === isInside(points[j])) continue;
-                const seg = sharedSegment(cells[i], cells[j]);
-                if (seg) segs.push(seg);
-            }
+            cells.forEach((poly, i) => {
+                if (poly.length < 3) return;
+                const inI = isInside(points[i]);
+                // Orientation, so the edge normal can be pointed out of the cell
+                let area2 = 0;
+                for (let k = 0; k < poly.length; k++) {
+                    const a = poly[k], b = poly[(k + 1) % poly.length];
+                    area2 += a.x * b.y - b.x * a.y;
+                }
+                const sgn = area2 >= 0 ? 1 : -1;
+                for (let k = 0; k < poly.length; k++) {
+                    const a = poly[k], b = poly[(k + 1) % poly.length];
+                    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+                    if (len < 1e-6) continue;
+                    // Probe 1e-4 px outside the midpoint
+                    const qx = (a.x + b.x) / 2 + (sgn * dy / len) * 1e-4;
+                    const qy = (a.y + b.y) / 2 - (sgn * dx / len) * 1e-4;
+                    let best = Infinity, owner = -1;
+                    for (let j = 0; j < n; j++) {
+                        if (j === i) continue;
+                        const pw = (qx - X[j]) ** 2 + (qy - Y[j]) ** 2 - W[j];
+                        if (pw < best) { best = pw; owner = j; }
+                    }
+                    if (owner >= 0 && isInside(points[owner]) !== inI) segs.push([a, b]);
+                }
+            });
             return segs;
         }
 
@@ -1191,7 +1214,7 @@
 
             // 3.8 Draw the power contour on top of the outline, gated by the toggle
             if (showContour) {
-                if (!geom.contour) geom.contour = computePowerContour(cells, geom.edges);
+                if (!geom.contour) geom.contour = computePowerContour(cells);
                 ctx.beginPath();
                 for (const [a, b] of geom.contour) {
                     ctx.moveTo(a.x, a.y);
