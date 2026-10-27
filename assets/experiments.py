@@ -58,9 +58,9 @@ def estimate_projections(xy, sdf, loops, inherit=True, refine=False, turning=0.0
         (page input, see turning_and_grad).
     turning_only: drop the length from the refine objective and minimize the
         turning-angle term alone (page checkbox; turning is then ignored).
-    rope: in the refine, use the rope length (a simplified contour through
-        the projection points, see rope_length_and_grad) instead of the
-        contour length (page checkbox).
+    rope: in the refine, use the rope's length and turning-angle energy (a
+        simplified contour through the projection points, see rope_terms)
+        instead of the contour's (page checkbox).
     rope_flat: below this turn (degrees) two consecutive projection points
         are joined straight instead of through their tangents' corner.
     turning_h: scale h of the turning-angle term, as a fraction of the
@@ -773,69 +773,53 @@ def place_on_loops(Q, Vc, loops, tol):
     return [sorted(o) for o in on]
 
 
-def rope_length_and_grad(X, W, labels, n, qs, qc, flat_deg=10.0, tol=1e-6, with_paths=False):
-    """Rope length and its gradient: (L, gq, gth) with gq (len(qs), 2) w.r.t.
-    the q positions (sites qs, segments and contour vertices) and gth
-    (len(qs),) w.r.t. their angles around their circles' centers qc (corner
-    pieces); with_paths also the rope as polylines. The first n sites are the
-    circles. A loop through fewer than two distinct q's, or not closed,
-    keeps its contour polyline."""
+def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_paths=False):
+    """Length L and turning-angle energy E of the rope (see turning_and_grad,
+    with every rope vertex counted: no discount at projection points) and
+    their gradients: (L, E, gq_L, gth_L, gq_E, gth_E[, paths]), gq_* (len(qs), 2)
+    w.r.t. the q positions (sites qs) and gth_* (len(qs),) w.r.t. their angles
+    around their circles' centers qc (through the corners X). The first n
+    sites are the circles. A loop through fewer than two distinct q's, or not
+    closed, keeps its contour polyline.
+
+    Each rope vertex is a q ("q", k), a contour vertex ("v", merged vertex:
+    a power vertex, chained back to the sites as in contour_length_and_grad)
+    or a corner ("x", a, ta, b, tb, ka, kb) where the tangent lines of q_ka
+    and q_kb meet; dX/dangle comes from central differences, rotating each q
+    together with its tangent."""
     C, R = X[:n], np.sqrt(np.maximum(W[:n], 0))
     flat = np.radians(flat_deg)
     T, Vplane = regular_triangulation(X, W)
     V, A, ok = power_vertices(X, W, T, Vplane)
     edges = contour_edges(T, labels)
-    L, gq, gth, paths = 0.0, np.zeros((len(qs), 2)), np.zeros(len(qs)), []
+    zq, zt = np.zeros((len(qs), 2)), np.zeros(len(qs))
     if not edges:
-        return (L, gq, gth, paths) if with_paths else (L, gq, gth)
+        out = (0.0, 0.0, zq, zt, zq.copy(), zt.copy())
+        return out + ([],) if with_paths else out
     ts, c, size, Vc, _, nbrs = merge_contour(V, edges)
-    gVc = np.zeros_like(Vc)
-    gQ = np.zeros((len(qs), 2))
     loops = rope_loops(Vc, nbrs)
     Q = X[qs]
 
-    def add_polyline(nodes):
-        # nodes: ("q", k) / ("v", merged vertex) / ("x", point); straight segments
-        nonlocal L
-        pos = [Q[i] if kind == "q" else Vc[i] if kind == "v" else i for kind, i in nodes]
-        for (k0, i0), (k1, i1), p0, p1 in zip(nodes, nodes[1:], pos, pos[1:]):
-            d = p1 - p0
-            l = np.hypot(*d)
-            L += l
-            if l < 1e-14:
-                continue
-            u = d / l
-            for kind, i, sgn in ((k0, i0, -1), (k1, i1, 1)):
-                if kind == "q":
-                    gQ[i] += sgn * u
-                elif kind == "v":
-                    gVc[i] += sgn * u
-        return pos
-
-    def rot(p, ctr, h):
-        cs, sn = np.cos(h), np.sin(h)
-        d = p - ctr
-        return ctr + np.array([cs * d[0] - sn * d[1], sn * d[0] + cs * d[1]])
-
+    # ---- the rope as closed / open node lists
+    rope = []                                           # (closed, nodes)
     for (closed, seq), on in zip(loops, place_on_loops(Q, Vc, loops, tol)):
         nP = len(seq)
         if nP < 2:
             continue
         distinct = len({tuple(np.round(Q[k] / tol)) for _, k in on})
         if not closed or distinct < 2:
-            nodes = [("v", v) for v in seq] + ([("v", seq[0])] if closed else [])
-            paths.append(add_polyline(nodes))
+            rope.append((closed, [("v", v) for v in seq]))
             continue
         P = Vc[seq]
-        E = np.roll(P, -1, 0) - P
-        El = np.linalg.norm(E, axis=1)
+        Ed = np.roll(P, -1, 0) - P
+        El = np.linalg.norm(Ed, axis=1)
 
         def edge_dir(i, step):
             for s in range(nP):
                 j = (i + step * s) % nP
                 if El[j] > tol:
-                    return E[j] / El[j]
-            return E[i % nP] / max(El[i % nP], 1e-300)
+                    return Ed[j] / El[j]
+            return Ed[i % nP] / max(El[i % nP], 1e-300)
 
         def dirs(p, k):
             """Contour directions arriving at / leaving q."""
@@ -844,51 +828,115 @@ def rope_length_and_grad(X, W, labels, n, qs, qc, flat_deg=10.0, tol=1e-6, with_
                 return edge_dir(i, -1), edge_dir(i + 1, 1)
             if np.hypot(*(Q[k] - P[i])) < tol:                 # at vertex i
                 return edge_dir(i - 1, -1), edge_dir(i, 1)
-            d = E[i] / max(El[i], 1e-300)
+            d = Ed[i] / max(El[i], 1e-300)
             return d, d
 
-        path = []
+        nodes = []
         for j, (pa, ka) in enumerate(on):
             pb, kb = on[(j + 1) % len(on)]
             a, b = Q[ka], Q[kb]
             ta, tb = dirs(pa, ka)[1], dirs(pb, kb)[0]
+            nodes.append(("q", ka))
             piece = rope_piece(a, ta, b, tb, C, R, flat, tol)
-            if piece is not None and piece[0] == "line":
-                path += add_polyline([("q", ka), ("q", kb)])
-            elif piece is not None:
-                X_ = piece[1]
-                path += [a, X_, b]
-                lam, mu = tangent_corner(a, ta, b, tb)[1:]
-                L += lam + mu
-                # angles: rotate q with its tangent around its circle's center
-                for k, which in ((ka, 0), (kb, 1)):
-                    h = 1e-7
-                    vals = []
-                    for sg in (1, -1):
-                        aa, tta, bb, ttb = a, ta, b, tb
-                        if which == 0:
-                            aa, tta = rot(a, qc[k], sg * h), rot(ta, np.zeros(2), sg * h)
-                        else:
-                            bb, ttb = rot(b, qc[k], sg * h), rot(tb, np.zeros(2), sg * h)
-                        sol = tangent_corner(aa, tta, bb, ttb)
-                        vals.append(sol[1] + sol[2] if sol is not None else lam + mu)
-                    gth[k] += (vals[0] - vals[1]) / (2 * h)
-            else:
+            if piece is not None and piece[0] == "corner":
+                nodes.append(("x", a, ta, b, tb, ka, kb))
+            elif piece is None:
                 ia, ib = int(np.floor(pa)) % nP, int(np.floor(pb)) % nP
                 if ib < ia or (ib == ia and pb < pa):
                     ib += nP
-                nodes = [("q", ka)] + [("v", seq[i % nP]) for i in range(ia + 1, ib + 1)] + [("q", kb)]
-                pts = np.array([Q[ka]] + [Vc[seq[i % nP]] for i in range(ia + 1, ib + 1)] + [Q[kb]])
+                mid = [seq[i % nP] for i in range(ia + 1, ib + 1)]
+                pts = np.array([a] + [Vc[v] for v in mid] + [b])
                 keep = shortest_clear_path(pts, C, R)
-                path += add_polyline([nodes[i] for i in keep])
-        paths.append(path)
+                nodes += [("v", mid[i - 1]) for i in keep[1:-1]]
+        rope.append((True, nodes))
 
-    # contour vertices -> their power vertices -> the sites
-    gV = np.zeros_like(V)
-    gV[ts] = gVc[c] / size[c][:, None]
-    gX = power_vertex_backprop(X, T, V, A, ok, gV)
-    gq = gQ + gX[qs]
-    return (L, gq, gth, paths) if with_paths else (L, gq, gth)
+    # ---- node positions, and d position / d angle for the corners
+    def rot(p, ctr, hh):
+        cs, sn = np.cos(hh), np.sin(hh)
+        d = p - ctr
+        return ctr + np.array([cs * d[0] - sn * d[1], sn * d[0] + cs * d[1]])
+
+    def corner(a, ta, b, tb):
+        sol = tangent_corner(a, ta, b, tb)
+        return sol[0] if sol is not None else (a + b) / 2
+
+    pos, jac = [], []
+    for closed, nodes in rope:
+        P_, J_ = [], []
+        for nd in nodes:
+            if nd[0] == "q":
+                P_.append(Q[nd[1]]); J_.append(None)
+            elif nd[0] == "v":
+                P_.append(Vc[nd[1]]); J_.append(None)
+            else:
+                _, a, ta, b, tb, ka, kb = nd
+                P_.append(corner(a, ta, b, tb))
+                hh, z = 1e-7, np.zeros(2)
+                dA = (corner(rot(a, qc[ka], hh), rot(ta, z, hh), b, tb) -
+                      corner(rot(a, qc[ka], -hh), rot(ta, z, -hh), b, tb)) / (2 * hh)
+                dB = (corner(a, ta, rot(b, qc[kb], hh), rot(tb, z, hh)) -
+                      corner(a, ta, rot(b, qc[kb], -hh), rot(tb, z, -hh))) / (2 * hh)
+                J_.append((ka, dA, kb, dB))
+        pos.append(np.array(P_).reshape(-1, 2))
+        jac.append(J_)
+
+    def chain(gpos):
+        """Gradient w.r.t. node positions -> (gq, gth)."""
+        gq, gth, gVc = np.zeros((len(qs), 2)), np.zeros(len(qs)), np.zeros_like(Vc)
+        for (closed, nodes), J_, G in zip(rope, jac, gpos):
+            for nd, J, g in zip(nodes, J_, G):
+                if nd[0] == "q":
+                    gq[nd[1]] += g
+                elif nd[0] == "v":
+                    gVc[nd[1]] += g
+                else:
+                    ka, dA, kb, dB = J
+                    gth[ka] += g @ dA
+                    gth[kb] += g @ dB
+        gV = np.zeros_like(V)
+        gV[ts] = gVc[c] / size[c][:, None]
+        gq += power_vertex_backprop(X, T, V, A, ok, gV)[qs]
+        return gq, gth
+
+    # ---- length
+    L, gL = 0.0, []
+    for (closed, nodes), P_ in zip(rope, pos):
+        G = np.zeros_like(P_)
+        idx = range(len(P_)) if closed else range(len(P_) - 1)
+        for i in idx:
+            j = (i + 1) % len(P_)
+            d = P_[j] - P_[i]
+            l = np.hypot(*d)
+            L += l
+            if l > 1e-14:
+                G[j] += d / l
+                G[i] -= d / l
+        gL.append(G)
+    gqL, gthL = chain(gL)
+
+    # ---- turning, on all rope vertices (merged when closer than 1e-6)
+    E, gE = 0.0, []
+    for (closed, nodes), P_ in zip(rope, pos):
+        k = len(P_)
+        if k < 3:
+            gE.append(np.zeros_like(P_))
+            continue
+        ed = [(0, 0, i, (i + 1) % k) for i in (range(k) if closed else range(k - 1))]
+        e, g, _ = turning_and_grad(P_, ed, np.zeros((0, 2)), h)
+        E += e
+        gE.append(g)
+    gqE, gthE = chain(gE)
+
+    out = (L, E, gqL, gthL, gqE, gthE)
+    if with_paths:
+        out += ([np.vstack([P_, P_[:1]]) if closed else P_ for (closed, _), P_ in zip(rope, pos)],)
+    return out
+
+
+def rope_length_and_grad(X, W, labels, n, qs, qc, flat_deg=10.0, tol=1e-6, with_paths=False):
+    """Rope length and its gradient (gq, gth); see rope_terms."""
+    out = rope_terms(X, W, labels, n, qs, qc, flat_deg, tol=tol, with_paths=with_paths)
+    return (out[0], out[2], out[3]) + ((out[6],) if with_paths else ())
 
 
 # ----------------------------------------------------------------------------- problem
@@ -934,24 +982,24 @@ class Problem:
         return X, W, lab
 
     def eval(self, theta):
-        """Objective lw * L + tw * E and its gradient; L is the contour length
-        (see contour_length_and_grad) or, with rope, the rope length (see
-        rope_length_and_grad)."""
+        """Objective lw * L + tw * E and its gradient; L and E are the contour's
+        length and turning-angle energy (see contour_length_and_grad) or, with
+        rope, the rope's (see rope_terms)."""
         X, W, lab = self.sites(theta)
         n, m = len(self.C), len(self.qidx)
         gq = np.zeros((n, 2))
         gth = np.zeros(n)
         f = 0.0
-        if not self.rope or self.tw:
-            lw = 0.0 if self.rope else self.lw
-            L, E, gX = contour_length_and_grad(X, W, lab, lw, self.tw, self.h)
+        if not self.rope:
+            L, E, gX = contour_length_and_grad(X, W, lab, self.lw, self.tw, self.h)
             gq[self.qidx] = gX[n:n + m]
-            f = lw * L + self.tw * E
-        if self.rope and self.lw:
-            Lr, gr, gtr = rope_length_and_grad(X, W, lab, n, np.arange(n, n + m), self.C[self.qidx], self.flat_deg)
-            gq[self.qidx] += self.lw * gr
-            gth[self.qidx] += self.lw * gtr
-            f += self.lw * Lr
+            f = self.lw * L + self.tw * E
+        else:
+            L, E, gqL, gthL, gqE, gthE = rope_terms(X, W, lab, n, np.arange(n, n + m), self.C[self.qidx],
+                                                    self.flat_deg, self.h)
+            gq[self.qidx] = self.lw * gqL + self.tw * gqE
+            gth[self.qidx] = self.lw * gthL + self.tw * gthE
+            f = self.lw * L + self.tw * E
         dq = self.R[:, None] * np.stack([-np.sin(theta), np.cos(theta)], 1)
         gth += (gq * dq).sum(1)
         gth[~self.free] = 0.0
@@ -962,10 +1010,10 @@ class Problem:
         L, E, _ = contour_length_and_grad(X, W, lab, 0.0, 1.0, self.h)
         return L, E
 
-    def rope_length(self, theta):
+    def rope_length_and_turning(self, theta):
         X, W, lab = self.sites(theta)
         n, m = len(self.C), len(self.qidx)
-        return rope_length_and_grad(X, W, lab, n, np.arange(n, n + m), self.C[self.qidx], self.flat_deg)[0]
+        return rope_terms(X, W, lab, n, np.arange(n, n + m), self.C[self.qidx], self.flat_deg, self.h)[:2]
 
     def project(self, theta):
         return np.clip(theta, self.lo, self.hi)
@@ -1008,9 +1056,9 @@ def sample_spacing(xy):
 def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_h=0.1, rope=False,
                        rope_flat=10.0):
     """Move each projection point along the exposed arcs of its circle to
-    minimize LENGTH_WEIGHT * the power-contour length (or, with rope, the
-    rope length) + turning * its
-    turning-angle energy (scale h = turning_h * sample_spacing(xy)), or with
+    minimize LENGTH_WEIGHT * the power-contour length + turning * its
+    turning-angle energy (scale h = turning_h * sample_spacing(xy)), both of
+    the rope instead with rope, or with
     turning_only the turning-angle energy alone, by projected gradient
     descent starting from proj0 (N, 2).
     NaN rows (dropped estimates) start from their circle center's projection
@@ -1038,14 +1086,14 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
                 flat_deg=rope_flat)
     th = p.theta_ref.copy()
     L0, E0 = p.length_and_turning(th)
-    R0 = p.rope_length(th)
+    R0, RE0 = p.rope_length_and_turning(th)
     th, hist = optimize(p, th, iters=REFINE_ITERS)
     q = p.q_of(th)
     q[~p.has_q] = np.nan
     L1, E1 = p.length_and_turning(th)
-    R1 = p.rope_length(th)
-    print(f"  refine{' (rope)' if rope else ''}: contour length {L0:.4f} -> {L1:.4f}, rope length {R0:.4f} -> {R1:.4f}, "
-          f"turning {E0:.4f} -> {E1:.4f} "
+    R1, RE1 = p.rope_length_and_turning(th)
+    print(f"  refine{' (rope)' if rope else ''}: contour length {L0:.4f} -> {L1:.4f}, turning {E0:.4f} -> {E1:.4f}; "
+          f"rope length {R0:.4f} -> {R1:.4f}, turning {RE0:.4f} -> {RE1:.4f} "
           f"(weights: length {lw:g}, turning {tw:g}, h = {turning_h:g} x spacing; {len(hist) - 1} iters); "
           f"{p.free.sum()} free, {p.is_corner.sum()} fixed corners, {(~p.has_q).sum()} without exposed arc")
     return q
