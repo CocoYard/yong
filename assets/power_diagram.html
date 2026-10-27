@@ -13,6 +13,7 @@
             pointer-events: auto; /* Allow clicks on UI elements */
             font-size: 14px; line-height: 1.5; color: #333; z-index: 10;
             max-height: calc(100vh - 60px); overflow-y: auto; overscroll-behavior: contain;
+            user-select: text; /* body is unselectable for canvas drags; the panel text can be copied */
         }
         .toggle-container {
             margin-top: 12px; padding-top: 12px; border-top: 1px solid #ddd;
@@ -42,6 +43,20 @@
         }
         #uiToggle:hover { background: #e6e6e6; }
         .row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-weight: normal; }
+        .weight-container .info {
+            display: inline-flex; align-items: center; justify-content: center; flex: none;
+            width: 15px; height: 15px; margin-top: 0; border: 1px solid #888; border-radius: 50%;
+            color: #555; font: italic bold 11px Georgia, serif; cursor: help; user-select: none;
+        }
+        .weight-container .info:hover { background: #555; color: #fff; }
+        #tip {
+            position: fixed; display: none; z-index: 1000; max-width: 320px; padding: 10px 12px;
+            background: #333; color: #fff; border-radius: 6px; font-size: 14px; line-height: 1.5;
+            font-weight: normal; pointer-events: none; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        }
+        #tip p { margin: 0 0 8px; }
+        #tip p:last-child { margin-bottom: 0; }
+        #tip b { color: #f5b041; }
     </style>
 </head>
 <body>
@@ -112,6 +127,7 @@
                     </label>
                     <label class="row" style="cursor: pointer;">
                         <input type="checkbox" id="toggleContour" style="margin: 0;"> Show power contour
+                        <span id="contourLen" style="display: inline; margin-top: 0; color: #d35400;"></span>
                     </label>
                     <label class="row" style="cursor: pointer;">
                         <input type="checkbox" id="toggleGT" style="margin: 0;"> GT projection points
@@ -122,6 +138,29 @@
                     <label class="row" style="cursor: pointer; margin-left: 22px;" title="Samples without a usable gradient take one solved by a sample whose best neighbor pair included them">
                         <input type="checkbox" id="toggleInherit" checked style="margin: 0;"> Inherit gradients from neighbors
                     </label>
+                    <div class="row" style="margin-left: 22px;">
+                        <label class="row" style="cursor: pointer; margin-top: 0;">
+                            <input type="checkbox" id="toggleRefine" style="margin: 0;"> Refine: minimize contour length
+                        </label>
+                        <span class="info">i</span>
+                        <div class="info-text" hidden>
+                            <p>Slide each projection point along its circle to minimize <b>L + w·T</b> (or <b>T</b> with Turning only).</p>
+                            <p><b>L</b>: contour length.<br><b>T</b>: sum of |turning angle| at contour vertices, skipping vertices on projection points; edges shorter than h barely count.</p>
+                            <p><b>Weight</b>: w. Right of it: T of the shown contour.<br><b>Turning scale h</b>: × sample spacing.</p>
+                        </div>
+                    </div>
+                    <div class="row" style="margin-left: 44px; flex-wrap: wrap; row-gap: 4px;">
+                        Turning-angle weight:
+                        <input type="number" id="turnWeight" value="0" min="0" step="0.01" style="width: 46px;">
+                        <label class="row" style="cursor: pointer; margin-top: 0; gap: 4px;">
+                            <input type="checkbox" id="turnOnly" style="margin: 0;"> Turning only
+                        </label>
+                        <span id="turnSum" style="display: inline; margin-top: 0; color: #d35400;"></span>
+                    </div>
+                    <div class="row" style="margin-left: 44px;">
+                        Turning scale h:
+                        <input type="number" id="turnH" value="0.1" min="0" step="0.05" style="width: 70px;"> × spacing
+                    </div>
                     <span style="color: #666; font-size: 12px; margin-top: 2px;">Projection points: r = 0, opposite sign of their sample; at most one kind at a time.</span>
                     <div class="row">
                         Rotation variance:
@@ -611,8 +650,27 @@
             else setProjMode('none');
         });
         // Estimation options: re-estimate right away when estimates are shown
-        document.getElementById('toggleInherit').addEventListener('change', () => {
-            if (projMode === 'est') runEstimate(true);
+        for (const id of ['toggleInherit', 'toggleRefine']) {
+            document.getElementById(id).addEventListener('change', () => {
+                if (projMode === 'est') runEstimate(true);
+            });
+        }
+        document.getElementById('turnWeight').addEventListener('change', (e) => {
+            let v = parseFloat(e.target.value);
+            if (!(v >= 0)) v = 0;
+            e.target.value = v;
+            if (projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
+        });
+        document.getElementById('turnOnly').addEventListener('change', (e) => {
+            document.getElementById('turnWeight').disabled = e.target.checked;
+            if (projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
+        });
+        document.getElementById('turnH').addEventListener('change', (e) => {
+            let v = parseFloat(e.target.value);
+            if (!(v >= 0)) v = 0;
+            e.target.value = v;
+            if (geom) { geom.turnSum = undefined; requestRender(); }
+            if (projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
         });
         document.getElementById('projVar').addEventListener('change', (e) => {
             let v = parseFloat(e.target.value);
@@ -656,7 +714,13 @@
                 }),
                 samples: samples.map((p) => ({ x: (p.x - cx) / s, y: -(p.y - cy) / s, sdf: p.sdf })),
                 // keyword arguments of estimate_projections()
-                options: { inherit: document.getElementById('toggleInherit').checked },
+                options: {
+                    inherit: document.getElementById('toggleInherit').checked,
+                    refine: document.getElementById('toggleRefine').checked,
+                    turning: parseFloat(document.getElementById('turnWeight').value) || 0,
+                    turning_only: document.getElementById('turnOnly').checked,
+                    turning_h: parseFloat(document.getElementById('turnH').value) || 0,
+                },
             };
         }
         function applyEstimates(samples, proj, record) {
@@ -958,6 +1022,199 @@
             return segs;
         }
 
+        // Total length covered by the segments. Each contour edge is collected
+        // from the cells on both sides, and degenerate (zero-area) cells add more
+        // overlapping copies, so merge collinear overlapping pieces instead of
+        // summing: group by supporting line, then merge 1D intervals.
+        function unionLength(segs) {
+            const lines = [];
+            for (const [a, b] of segs) {
+                const len = Math.hypot(b.x - a.x, b.y - a.y);
+                if (len < 1e-9) continue;
+                let ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
+                if (ux < -1e-12 || (Math.abs(ux) <= 1e-12 && uy < 0)) { ux = -ux; uy = -uy; }
+                const t0 = ux * a.x + uy * a.y, t1 = ux * b.x + uy * b.y;
+                lines.push({ dir: Math.round(Math.atan2(uy, ux) * 1e6), off: ux * a.y - uy * a.x,
+                             lo: Math.min(t0, t1), hi: Math.max(t0, t1) });
+            }
+            lines.sort((p, q) => p.dir - q.dir || p.off - q.off);
+            let total = 0;
+            for (let i = 0; i < lines.length; ) {
+                // one supporting line: same direction (1e-6 rad) and offset (1e-4 px)
+                let j = i + 1;
+                while (j < lines.length && lines[j].dir === lines[i].dir &&
+                       lines[j].off - lines[j - 1].off < 1e-4) j++;
+                const iv = lines.slice(i, j).sort((p, q) => p.lo - q.lo);
+                let lo = iv[0].lo, hi = iv[0].hi;
+                for (const s of iv.slice(1)) {
+                    if (s.lo > hi) { total += hi - lo; lo = s.lo; hi = s.hi; }
+                    else hi = Math.max(hi, s.hi);
+                }
+                total += hi - lo;
+                i = j;
+            }
+            return total;
+        }
+
+        // Turning-angle energy of the contour (radians), as in turning_and_grad
+        // in experiments.py: each edge shorter than h is contracted with
+        // probability 1 - l / h, and the energy is the expected sum of |net
+        // turning angle| over the resulting vertices (h <= 0: the plain sum).
+        // Also returns the plain sum of |turning angle|. Only vertices with
+        // exactly two contour neighbors count, and vertices at a projection
+        // point are skipped (a corner there is a corner of the shape); runs
+        // through them cost 0. Endpoints closer than tol are merged first, and
+        // each segment is split at the vertices lying on it, since the segments
+        // come in overlapping copies.
+        function turningSum(segs, tol, h) {
+            const pts = [];
+            for (const [a, b] of segs) {
+                if (Math.hypot(b.x - a.x, b.y - a.y) >= tol) pts.push(a, b);
+            }
+            // Merge endpoints (grid hash with cells of size tol + union-find)
+            const parent = pts.map((_, i) => i);
+            const find = (i) => {
+                while (parent[i] !== i) i = parent[i] = parent[parent[i]];
+                return i;
+            };
+            const grid = new Map();
+            pts.forEach((p, i) => {
+                const gx = Math.floor(p.x / tol), gy = Math.floor(p.y / tol);
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        const cell = grid.get(`${gx + dx},${gy + dy}`);
+                        if (!cell) continue;
+                        for (const j of cell) {
+                            if (Math.hypot(pts[j].x - p.x, pts[j].y - p.y) < tol) parent[find(i)] = find(j);
+                        }
+                    }
+                }
+                const key = `${gx},${gy}`;
+                if (!grid.has(key)) grid.set(key, []);
+                grid.get(key).push(i);
+            });
+            const id = new Map(), V = [];
+            pts.forEach((p, i) => {
+                const r = find(i);
+                if (!id.has(r)) { id.set(r, V.length); V.push({ x: 0, y: 0, n: 0 }); }
+                const v = V[id.get(r)];
+                v.x += p.x; v.y += p.y; v.n++;
+            });
+            for (const v of V) { v.x /= v.n; v.y /= v.n; }
+            const vid = pts.map((_, i) => id.get(find(i)));
+
+            // Contour neighbors: split each segment at the vertices on it
+            const nbrs = V.map(() => new Set());
+            for (let k = 0; k < pts.length; k += 2) {
+                const a = vid[k], b = vid[k + 1];
+                if (a === b) continue;
+                const A = V[a], dx = V[b].x - A.x, dy = V[b].y - A.y, L2 = dx * dx + dy * dy;
+                const on = [[0, a], [1, b]];
+                V.forEach((P, m) => {
+                    if (m === a || m === b) return;
+                    const t = ((P.x - A.x) * dx + (P.y - A.y) * dy) / L2;
+                    if (t > 0 && t < 1 && Math.hypot(A.x + t * dx - P.x, A.y + t * dy - P.y) < tol) on.push([t, m]);
+                });
+                on.sort((p, q) => p[0] - q[0]);
+                for (let i = 1; i < on.length; i++) {
+                    const u = on[i - 1][1], w = on[i][1];
+                    if (u !== w) { nbrs[u].add(w); nbrs[w].add(u); }
+                }
+            }
+
+            // Signed turning angle at each vertex with two neighbors
+            const qs = points.filter((p) => p.proj);
+            // signed, walking a -> v -> b with a = first[v]
+            const theta = new Float64Array(V.length), isNull = V.map(() => true), first = V.map(() => -1);
+            let raw = 0;
+            V.forEach((v, m) => {
+                if (nbrs[m].size !== 2) return;
+                if (qs.some((q) => Math.hypot(q.x - v.x, q.y - v.y) < tol)) return;
+                const [ia, ib] = [...nbrs[m]];
+                const a = V[ia], b = V[ib];
+                first[m] = ia;
+                const e1x = v.x - a.x, e1y = v.y - a.y, e2x = b.x - v.x, e2y = b.y - v.y;
+                theta[m] = Math.atan2(e1x * e2y - e1y * e2x, e1x * e2x + e1y * e2y);
+                isNull[m] = false;
+                raw += Math.abs(theta[m]);
+            });
+
+            // Short edges (s = l / h < 1) and the runs of vertices they join
+            const sOf = new Map(), adj = V.map(() => []);
+            const key = (i, j) => (i < j ? `${i},${j}` : `${j},${i}`);
+            if (h > 0) {
+                V.forEach((v, i) => {
+                    for (const j of nbrs[i]) {
+                        if (j < i) continue;
+                        const l = Math.hypot(V[j].x - v.x, V[j].y - v.y);
+                        if (l < h) { sOf.set(key(i, j), l / h); adj[i].push(j); adj[j].push(i); }
+                    }
+                });
+            }
+            let total = 0;
+            const seen = V.map(() => false);
+            V.forEach((_, v0) => {
+                if (seen[v0]) return;
+                const comp = [], stack = [v0];
+                seen[v0] = true;
+                while (stack.length) {
+                    const u = stack.pop();
+                    comp.push(u);
+                    for (const w of adj[u]) if (!seen[w]) { seen[w] = true; stack.push(w); }
+                }
+                const nE = comp.reduce((t, u) => t + adj[u].length, 0) / 2;
+                let runs;
+                if (comp.length > 1 && nE === comp.length - 1 && comp.every((u) => adj[u].length <= 2)) {
+                    const path = [comp.find((u) => adj[u].length === 1)];
+                    while (path.length < comp.length) {
+                        const last = path[path.length - 1], prev = path[path.length - 2];
+                        path.push(adj[last].find((w) => w !== prev));
+                    }
+                    runs = [path];
+                } else {
+                    runs = comp.map((u) => [u]);
+                }
+                for (const path of runs) {
+                    const m = path.length;
+                    const se = [];
+                    for (let t = 0; t + 1 < m; t++) se.push(sOf.get(key(path[t], path[t + 1])));
+                    // Angles walking along the path, so a run's angles add up to its net turn
+                    const th = path.map((v, t) => {
+                        if (m === 1) return theta[v];
+                        const prev = t > 0 ? path[t - 1] : [...nbrs[v]].find((w) => w !== path[1]);
+                        return first[v] === prev ? theta[v] : -theta[v];
+                    });
+                    for (let i = 0; i < m; i++) {
+                        let S = 0, cut = 1;
+                        for (let j = i; j < m; j++) {
+                            if (isNull[path[j]]) break;
+                            if (j > i) cut *= 1 - se[j - 1];
+                            const base = (i > 0 ? se[i - 1] : 1) * cut;
+                            if (base < 1e-15) break;    // only shrinks as j grows
+                            const pr = base * (j < m - 1 ? se[j] : 1);
+                            S += th[j];
+                            total += pr * Math.abs(S);
+                        }
+                    }
+                }
+            });
+            return { total, raw };
+        }
+
+        // Median distance from each SDF sample to its nearest other sample, as
+        // sample_spacing in experiments.py (the grid step for a sampled grid)
+        function sampleSpacing() {
+            const S = sdfSamples();
+            const d = S.map((p) => {
+                let best = Infinity;
+                for (const q of S) if (q !== p) best = Math.min(best, Math.hypot(q.x - p.x, q.y - p.y));
+                return best;
+            }).filter(Number.isFinite).sort((a, b) => a - b);
+            if (!d.length) return 0;
+            const k = d.length >> 1;
+            return d.length % 2 ? d[k] : (d[k - 1] + d[k]) / 2;
+        }
+
         // Cells + adjacency are cached and only recomputed when the points change,
         // so panning stays smooth even with hundreds of sampled points.
         let geom = null;
@@ -1043,6 +1300,9 @@
         }
 
         const sideColorOf = (p) => (isInside(p) ? '#8e44ad' : '#43a047');
+
+        const contourLenEl = document.getElementById('contourLen');
+        const turnSumEl = document.getElementById('turnSum');
 
         function render() {
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1227,6 +1487,26 @@
                 ctx.stroke();
                 ctx.lineCap = 'butt';
                 ctx.lineJoin = 'miter';
+                // In the shape's normalized units (as in experiments.py) when a
+                // shape is loaded, else in pixels
+                if (geom.contourLen === undefined) geom.contourLen = unionLength(geom.contour);
+                const len = geom.contourLen;
+                contourLenEl.textContent = shapeLoops
+                    ? `Length = ${(len / shapeView.s).toFixed(4)}`
+                    : `Length = ${len.toFixed(1)} px`;
+                // Merge tolerance 1e-6 in normalized units, as in experiments.py
+                if (geom.turnSum === undefined) {
+                    const hr = parseFloat(document.getElementById('turnH').value) || 0;
+                    geom.turnSum = turningSum(geom.contour, shapeLoops ? 1e-6 * shapeView.s : 1e-4,
+                                              hr * sampleSpacing());
+                }
+                const { total, raw } = geom.turnSum;
+                turnSumEl.textContent = total === raw
+                    ? `Σ|θ| = ${raw.toFixed(2)}`
+                    : `Σ|θ| = ${total.toFixed(2)} (raw ${raw.toFixed(2)})`;
+            } else {
+                contourLenEl.textContent = '';
+                turnSumEl.textContent = '';
             }
 
             // 3.9 Projection points on top of the outline and contour:
@@ -1515,6 +1795,25 @@
 
         // Initial render
         resize();
+    
+        // Hover tooltips for the (i) icons: the text is the icon's next sibling
+        // (.info-text), shown in a fixed box so the scrolling panel can't clip it
+        const tipEl = document.createElement('div');
+        tipEl.id = 'tip';
+        document.body.appendChild(tipEl);
+        for (const icon of document.querySelectorAll('.info')) {
+            icon.addEventListener('mouseenter', () => {
+                tipEl.innerHTML = icon.nextElementSibling.innerHTML;
+                tipEl.style.display = 'block';
+                const r = icon.getBoundingClientRect(), t = tipEl.getBoundingClientRect();
+                let x = r.right + 8, y = r.top - 8;
+                if (x + t.width > window.innerWidth - 8) x = Math.max(8, r.left - t.width - 8);
+                y = Math.max(8, Math.min(y, window.innerHeight - t.height - 8));
+                tipEl.style.left = `${x}px`;
+                tipEl.style.top = `${y}px`;
+            });
+            icon.addEventListener('mouseleave', () => { tipEl.style.display = 'none'; });
+        }
     </script>
 </body>
 </html>
