@@ -130,6 +130,14 @@
                         <span id="contourLen" style="display: inline; margin-top: 0; color: #d35400;"></span>
                     </label>
                     <label class="row" style="cursor: pointer;">
+                        <input type="checkbox" id="toggleRope" style="margin: 0;"> Show rope
+                        <span id="ropeLen" style="display: inline; margin-top: 0; color: #2471a3;"></span>
+                    </label>
+                    <div class="row" style="margin-left: 22px;" title="Two consecutive projection points are joined straight when their tangents turn by less than this, or one tangent points at the other within it; else through the corner where their tangent lines meet">
+                        Rope flat angle:
+                        <input type="number" id="ropeFlat" value="10" min="0" max="90" step="1" style="width: 56px;"> °
+                    </div>
+                    <label class="row" style="cursor: pointer;">
                         <input type="checkbox" id="toggleGT" style="margin: 0;"> GT projection points
                     </label>
                     <label class="row" style="cursor: pointer;" title="Runs estimate_projections() in assets/experiments.py (needs: python3 assets/estimate_server.py)">
@@ -145,7 +153,7 @@
                         <span class="info">i</span>
                         <div class="info-text" hidden>
                             <p>Slide each projection point along its circle to minimize <b>L + w·T</b> (or <b>T</b> with Turning only).</p>
-                            <p><b>L</b>: contour length.<br><b>T</b>: sum of |turning angle| at contour vertices, skipping vertices on projection points; edges shorter than h barely count.</p>
+                            <p><b>L</b>: contour length, or with Use rope length the rope's: the projection points joined in contour order, straight or through the corner of their tangents (see Rope flat angle), else along the contour without cutting into a circle.<br><b>T</b>: sum of |turning angle| at contour vertices, skipping vertices on projection points; edges shorter than h barely count.</p>
                             <p><b>Weight</b>: w. Right of it: T of the shown contour.<br><b>Turning scale h</b>: × sample spacing.</p>
                         </div>
                     </div>
@@ -157,6 +165,9 @@
                         </label>
                         <span id="turnSum" style="display: inline; margin-top: 0; color: #d35400;"></span>
                     </div>
+                    <label class="row" style="cursor: pointer; margin-left: 44px;">
+                        <input type="checkbox" id="ropeOpt" style="margin: 0;"> Use rope length
+                    </label>
                     <div class="row" style="margin-left: 44px;">
                         Turning scale h:
                         <input type="number" id="turnH" value="0.1" min="0" step="0.05" style="width: 70px;"> × spacing
@@ -190,6 +201,7 @@
         let showRT = true;
         let showSphere = false;
         let showContour = false;
+        let showRope = false;
 
         // Collapse / expand the whole control panel down to its title
         const uiToggle = document.getElementById('uiToggle');
@@ -212,6 +224,10 @@
         });
         document.getElementById('toggleContour').addEventListener('change', (e) => {
             showContour = e.target.checked;
+            render();
+        });
+        document.getElementById('toggleRope').addEventListener('change', (e) => {
+            showRope = e.target.checked;
             render();
         });
 
@@ -661,6 +677,17 @@
             e.target.value = v;
             if (projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
         });
+        document.getElementById('ropeFlat').addEventListener('change', (e) => {
+            let v = parseFloat(e.target.value);
+            if (!(v >= 0)) v = 0;
+            e.target.value = Math.min(v, 90);
+            if (geom) { geom.rope = null; requestRender(); }
+            const rope = document.getElementById('ropeOpt').checked;
+            if (rope && projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
+        });
+        document.getElementById('ropeOpt').addEventListener('change', () => {
+            if (projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
+        });
         document.getElementById('turnOnly').addEventListener('change', (e) => {
             document.getElementById('turnWeight').disabled = e.target.checked;
             if (projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
@@ -719,6 +746,8 @@
                     refine: document.getElementById('toggleRefine').checked,
                     turning: parseFloat(document.getElementById('turnWeight').value) || 0,
                     turning_only: document.getElementById('turnOnly').checked,
+                    rope: document.getElementById('ropeOpt').checked,
+                    rope_flat: parseFloat(document.getElementById('ropeFlat').value) || 0,
                     turning_h: parseFloat(document.getElementById('turnH').value) || 0,
                 },
             };
@@ -1016,7 +1045,7 @@
                         const pw = (qx - X[j]) ** 2 + (qy - Y[j]) ** 2 - W[j];
                         if (pw < best) { best = pw; owner = j; }
                     }
-                    if (owner >= 0 && isInside(points[owner]) !== inI) segs.push([a, b]);
+                    if (owner >= 0 && isInside(points[owner]) !== inI) segs.push([a, b, i, owner]);
                 }
             });
             return segs;
@@ -1063,15 +1092,17 @@
         // Also returns the plain sum of |turning angle|. Only vertices with
         // exactly two contour neighbors count, and vertices at a projection
         // point are skipped (a corner there is a corner of the shape); runs
-        // through them cost 0. Endpoints closer than tol are merged first, and
-        // each segment is split at the vertices lying on it, since the segments
-        // come in overlapping copies.
-        function turningSum(segs, tol, h) {
-            const pts = [];
-            for (const [a, b] of segs) {
-                if (Math.hypot(b.x - a.x, b.y - a.y) >= tol) pts.push(a, b);
+        // through them cost 0.
+        // The contour as a graph: segment endpoints closer than tol merged
+        // (grid hash with cells of size tol + union-find), and each segment
+        // split at the vertices lying on it, since the segments come in
+        // overlapping copies. Returns the vertices V, their neighbor sets, and
+        // for each edge ("u,w", u < w) its two sites [i, j] (indices into points).
+        function contourGraph(segs, tol) {
+            const pts = [], segSites = [];
+            for (const [a, b, i, j] of segs) {
+                if (Math.hypot(b.x - a.x, b.y - a.y) >= tol) { pts.push(a, b); segSites.push([i, j]); }
             }
-            // Merge endpoints (grid hash with cells of size tol + union-find)
             const parent = pts.map((_, i) => i);
             const find = (i) => {
                 while (parent[i] !== i) i = parent[i] = parent[parent[i]];
@@ -1104,7 +1135,7 @@
             const vid = pts.map((_, i) => id.get(find(i)));
 
             // Contour neighbors: split each segment at the vertices on it
-            const nbrs = V.map(() => new Set());
+            const nbrs = V.map(() => new Set()), sites = new Map();
             for (let k = 0; k < pts.length; k += 2) {
                 const a = vid[k], b = vid[k + 1];
                 if (a === b) continue;
@@ -1118,9 +1149,17 @@
                 on.sort((p, q) => p[0] - q[0]);
                 for (let i = 1; i < on.length; i++) {
                     const u = on[i - 1][1], w = on[i][1];
-                    if (u !== w) { nbrs[u].add(w); nbrs[w].add(u); }
+                    if (u === w) continue;
+                    nbrs[u].add(w); nbrs[w].add(u);
+                    const key = u < w ? `${u},${w}` : `${w},${u}`;
+                    if (!sites.has(key)) sites.set(key, segSites[k / 2]);
                 }
             }
+            return { V, nbrs, sites };
+        }
+
+        function turningSum(segs, tol, h) {
+            const { V, nbrs } = contourGraph(segs, tol);
 
             // Signed turning angle at each vertex with two neighbors
             const qs = points.filter((p) => p.proj);
@@ -1199,6 +1238,166 @@
                 }
             });
             return { total, raw };
+        }
+
+        // The rope, as rope_length_and_grad in experiments.py: a simplified
+        // contour through the projection points. Walking each contour loop gives
+        // the order of the projection points on it and the contour's direction
+        // leaving / arriving at each (its circle's tangent). Between two
+        // consecutive ones a, b: the segment ab when the tangents turn by less
+        // than the flat angle or one tangent points at the other point (within
+        // it); else a -> X -> b through the corner X where the tangent lines
+        // meet; if that cuts into a circle (by more than eps) or X lies behind a
+        // or beyond b, the shortest polyline from a to b through the contour
+        // vertices between them that cuts into none. Returns polylines and length.
+        function cutsCircle(p0, p1, circles, eps) {
+            const dx = p1.x - p0.x, dy = p1.y - p0.y, L2 = dx * dx + dy * dy;
+            for (const c of circles) {
+                const t = L2 > 1e-18 ? Math.max(0, Math.min(1, ((c.x - p0.x) * dx + (c.y - p0.y) * dy) / L2)) : 0;
+                if (c.r - Math.hypot(c.x - p0.x - t * dx, c.y - p0.y - t * dy) > eps) return true;
+            }
+            return false;
+        }
+
+        function ropePiece(a, ta, b, tb, circles, flat, tol, eps) {
+            // [a, b], [a, X, b], or null (use the contour fallback)
+            const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy);
+            if (l < tol) return [a, b];
+            const cf = Math.cos(flat);
+            if (ta.x * tb.x + ta.y * tb.y >= cf || ta.x * dx + ta.y * dy >= cf * l || tb.x * dx + tb.y * dy >= cf * l) {
+                return cutsCircle(a, b, circles, eps) ? null : [a, b];
+            }
+            const det = ta.x * tb.y - ta.y * tb.x;
+            if (Math.abs(det) < 1e-12) return null;
+            const lam = (dx * tb.y - dy * tb.x) / det, mu = (ta.x * dy - ta.y * dx) / det;
+            if (lam < 0 || mu < 0) return null;
+            const X = { x: a.x + lam * ta.x, y: a.y + lam * ta.y };
+            return cutsCircle(a, X, circles, eps) || cutsCircle(X, b, circles, eps) ? null : [a, X, b];
+        }
+
+        function shortestClearPath(pts, circles, eps) {
+            // Dijkstra over pts; consecutive points (contour edges) always allowed
+            const k = pts.length, dist = new Array(k).fill(Infinity), prev = new Array(k).fill(-1), done = new Array(k).fill(false);
+            dist[0] = 0;
+            for (;;) {
+                let i = -1;
+                for (let j = 0; j < k; j++) if (!done[j] && (i < 0 || dist[j] < dist[i])) i = j;
+                if (i < 0 || !Number.isFinite(dist[i])) break;
+                done[i] = true;
+                if (i === k - 1) break;
+                for (let j = 0; j < k; j++) {
+                    if (done[j]) continue;
+                    const dj = dist[i] + Math.hypot(pts[j].x - pts[i].x, pts[j].y - pts[i].y);
+                    if (dj < dist[j] && (Math.abs(i - j) === 1 || !cutsCircle(pts[i], pts[j], circles, eps))) {
+                        dist[j] = dj; prev[j] = i;
+                    }
+                }
+            }
+            const path = [k - 1];
+            while (path[path.length - 1] > 0) path.push(prev[path[path.length - 1]]);
+            return path.reverse().map((i) => pts[i]);
+        }
+
+        function computeRope(segs, tol, flat, eps) {
+            const { V, nbrs, sites } = contourGraph(segs, tol);
+            const key = (u, w) => (u < w ? `${u},${w}` : `${w},${u}`);
+            // Prune dead-end spurs (vertices left with one neighbor), which
+            // would stop the walk around a loop
+            const stack = V.map((_, v) => v).filter((v) => nbrs[v].size === 1);
+            while (stack.length) {
+                const v = stack.pop();
+                for (const w of nbrs[v]) {
+                    nbrs[w].delete(v);
+                    sites.delete(key(v, w));
+                    if (nbrs[w].size === 1) stack.push(w);
+                }
+                nbrs[v].clear();
+            }
+            const used = new Set(), loops = [];
+            for (const k0 of sites.keys()) {
+                if (used.has(k0)) continue;
+                used.add(k0);
+                const [u0, w0] = k0.split(',').map(Number);
+                let seq = [u0];
+                let prev = u0, cur = w0;
+                while (cur !== u0) {
+                    seq.push(cur);
+                    const nxt = [...nbrs[cur]].filter((w) => !used.has(key(cur, w)));
+                    if (!nxt.length) break;
+                    const w = nxt.find((x) => x !== prev) ?? nxt[0];
+                    used.add(key(cur, w));
+                    prev = cur; cur = w;
+                }
+                let closed = cur === u0;
+                if (!closed) {
+                    // Stuck at a junction: keep the cycle the walk closed there, if any
+                    const j = seq.indexOf(cur);
+                    if (j >= 0 && j < seq.length - 2) { seq = seq.slice(j); closed = true; }
+                }
+                loops.push({ closed, P: seq.map((v) => V[v]), qs: [] });
+            }
+
+            // Each projection point goes on the loop edge it lies on
+            for (const Q of points.filter((p) => p.proj)) {
+                let best = [tol, -1, 0];
+                loops.forEach((lp, li) => {
+                    const nE = lp.closed ? lp.P.length : lp.P.length - 1;
+                    for (let i = 0; i < nE; i++) {
+                        const A = lp.P[i], B = lp.P[(i + 1) % lp.P.length];
+                        const dx = B.x - A.x, dy = B.y - A.y, L2 = Math.max(dx * dx + dy * dy, 1e-300);
+                        const t = Math.max(0, Math.min(1, ((Q.x - A.x) * dx + (Q.y - A.y) * dy) / L2));
+                        const dist = Math.hypot(A.x + t * dx - Q.x, A.y + t * dy - Q.y);
+                        if (dist < best[0]) best = [dist, li, i + t];
+                    }
+                });
+                if (best[1] >= 0) loops[best[1]].qs.push([best[2], Q]);
+            }
+
+            const circles = points.filter((p) => !p.proj && p.r > 0);
+            const lines = [];
+            let length = 0, kept = 0;
+            const addLine = (pts) => {
+                lines.push(pts);
+                for (let i = 1; i < pts.length; i++) length += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+            };
+            for (const lp of loops) {
+                const P = lp.P, nP = P.length;
+                lp.qs.sort((p, q) => p[0] - q[0]);
+                if (!lp.closed || lp.qs.length < 2) {     // keep the contour polyline
+                    kept++;
+                    addLine(lp.closed ? [...P, P[0]] : P);
+                    continue;
+                }
+                const E = P.map((p, i) => ({ x: P[(i + 1) % nP].x - p.x, y: P[(i + 1) % nP].y - p.y }));
+                const El = E.map((e) => Math.hypot(e.x, e.y));
+                const edgeDir = (i, step) => {
+                    for (let s = 0; s < nP; s++) {
+                        const j = (((i + step * s) % nP) + nP) % nP;
+                        if (El[j] > tol) return { x: E[j].x / El[j], y: E[j].y / El[j] };
+                    }
+                    return { x: 1, y: 0 };
+                };
+                // Contour directions arriving at / leaving a projection point
+                const dirs = (p, Q) => {
+                    const i = Math.floor(p) % nP, nx = P[(i + 1) % nP];
+                    if (Math.hypot(Q.x - nx.x, Q.y - nx.y) < tol) return [edgeDir(i, -1), edgeDir(i + 1, 1)];
+                    if (Math.hypot(Q.x - P[i].x, Q.y - P[i].y) < tol) return [edgeDir(i - 1, -1), edgeDir(i, 1)];
+                    return [edgeDir(i, 1), edgeDir(i, 1)];
+                };
+                lp.qs.forEach(([pa, a], j) => {
+                    const [pb, b] = lp.qs[(j + 1) % lp.qs.length];
+                    const piece = ropePiece(a, dirs(pa, a)[1], b, dirs(pb, b)[0], circles, flat, tol, eps);
+                    if (piece) { addLine(piece); return; }
+                    const ia = Math.floor(pa) % nP;
+                    let ib = Math.floor(pb) % nP;
+                    if (ib < ia || (ib === ia && pb < pa)) ib += nP;
+                    const pts = [a];
+                    for (let i = ia + 1; i <= ib; i++) pts.push(P[i % nP]);
+                    pts.push(b);
+                    addLine(shortestClearPath(pts, circles, eps));
+                });
+            }
+            return { lines, length, loops: loops.length, kept };
         }
 
         // Median distance from each SDF sample to its nearest other sample, as
@@ -1303,6 +1502,7 @@
 
         const contourLenEl = document.getElementById('contourLen');
         const turnSumEl = document.getElementById('turnSum');
+        const ropeLenEl = document.getElementById('ropeLen');
 
         function render() {
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1507,6 +1707,36 @@
             } else {
                 contourLenEl.textContent = '';
                 turnSumEl.textContent = '';
+            }
+
+            // 3.85 The rope (the contour pulled taut through the projection points)
+            if (showRope) {
+                if (!geom.contour) geom.contour = computePowerContour(cells);
+                if (!geom.rope) {
+                    // Tolerances in normalized units, as in experiments.py
+                    const unit = shapeLoops ? shapeView.s : 1;
+                    const flat = (parseFloat(document.getElementById('ropeFlat').value) || 0) * Math.PI / 180;
+                    geom.rope = computeRope(geom.contour, shapeLoops ? 1e-6 * unit : 1e-4, flat, 1e-3 * unit);
+                }
+                ctx.beginPath();
+                for (const pts of geom.rope.lines) {
+                    ctx.moveTo(pts[0].x, pts[0].y);
+                    for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y);
+                }
+                ctx.strokeStyle = '#2471a3';
+                ctx.lineWidth = 2.5 * u;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+                ctx.lineCap = 'butt';
+                ctx.lineJoin = 'miter';
+                const { length: len, loops, kept } = geom.rope;
+                ropeLenEl.textContent = (shapeLoops
+                    ? `Length = ${(len / shapeView.s).toFixed(4)}`
+                    : `Length = ${len.toFixed(1)} px`) +
+                    (kept ? ` (${kept}/${loops} loop${loops > 1 ? 's' : ''} kept as contour)` : '');
+            } else {
+                ropeLenEl.textContent = '';
             }
 
             // 3.9 Projection points on top of the outline and contour:
