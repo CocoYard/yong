@@ -76,16 +76,18 @@ def estimate_projections(xy, sdf, loops, inherit=True, refine=False, turning=0.0
     """
     r = np.abs(sdf)
     neighbors = regular_triangulation_neighbors(xy, r)
-    grads, errors, inherited = estimate_gradients_RANSAC(xy, sdf, neighbors, inherit)
+    grads, errors, inherited, ambiguous = estimate_gradients_RANSAC(xy, sdf, neighbors, inherit)
     proj = xy - sdf[:, None] * grads
 
-    no_grad = np.linalg.norm(grads, axis=1) < 0.5       # hidden or too few neighbors
+    no_grad = np.linalg.norm(grads, axis=1) < 0.5       # hidden, too few neighbors, or ambiguous
     high_err = ~no_grad & (errors > ERROR_THRESHOLD)
     infeasible = ~no_grad & ~high_err & covered_by_other_circle(proj, xy, r)
     proj[no_grad | high_err | infeasible] = np.nan
     print(f"  kept {np.isfinite(proj[:, 0]).sum()}/{len(xy)} "
-          f"({(inherited & np.isfinite(proj[:, 0])).sum()} with an inherited gradient); dropped: "
-          f"{no_grad.sum()} no gradient, {high_err.sum()} error > {ERROR_THRESHOLD}, "
+          f"({(inherited & np.isfinite(proj[:, 0])).sum()} with an inherited gradient, "
+          f"{(inherited & ambiguous & np.isfinite(proj[:, 0])).sum()} of them ambiguous); dropped: "
+          f"{no_grad.sum()} no gradient ({(no_grad & ambiguous).sum()} ambiguous), "
+          f"{high_err.sum()} error > {ERROR_THRESHOLD}, "
           f"{infeasible.sum()} inside another circle")
     if refine:
         proj = refine_projections(xy, sdf, proj, turning, turning_only, turning_h, rope, rope_flat)
@@ -104,20 +106,24 @@ def estimate_gradients_RANSAC(points, sdf_values, neighbors, inherit=True):
         errors: (N,) mean absolute residual of each gradient on the neighbor
             pair it was solved from (inf when no gradient could be fit)
         inherited: (N,) bool, gradient taken from another sample (see below)
+        ambiguous: (N,) bool, several feasible perfect gradients (see
+            estimate_gradient_exhaustive)
 
     The gradient a sample c solves from its neighbor pair (n_i, n_j) fits the
     linear model through all three points, so it is also a gradient for n_i and
     n_j. Neighborhoods are not transitive, so n_i may not find a usable gradient
-    from its own neighbors; such samples inherit the lowest-error gradient
-    among those solved by samples that used them in their pair.
+    from its own neighbors, or may find several (ambiguous); such samples
+    inherit the lowest-error gradient among those solved, unambiguously, by
+    samples that used them in their pair.
     """
     n = points.shape[0]
     gradients = np.zeros_like(points)
     errors = np.zeros(n)
     donor_grad = np.zeros_like(points)   # best gradient handed to each sample
     donor_err = np.full(n, np.inf)
+    ambiguous = np.zeros(n, bool)
     for c in range(n):
-        gradients[c], errors[c], pair = estimate_gradient_exhaustive(points, sdf_values, c, neighbors[c])
+        gradients[c], errors[c], pair, ambiguous[c] = estimate_gradient_exhaustive(points, sdf_values, c, neighbors[c])
         if pair is None:
             continue
         for m in pair:
@@ -129,15 +135,25 @@ def estimate_gradients_RANSAC(points, sdf_values, neighbors, inherit=True):
     inherited = ~usable & (donor_err <= ERROR_THRESHOLD) & inherit
     gradients[inherited] = donor_grad[inherited]
     errors[inherited] = donor_err[inherited]
-    return gradients, errors, inherited
+    return gradients, errors, inherited, ambiguous
 
 
 def estimate_gradient_exhaustive(points, sdf_values, ind, indices):
     """
     Brute-force all pairs of neighbors to find the unit gradient that minimizes
     the mean absolute residual on its own pair.
-    Returns (gradient, loss, pair): pair holds the indices of the two neighbors
-    that produced the gradient, or None when it did not come from a pair.
+    Returns (gradient, loss, pair, ambiguous): pair holds the indices of the
+    two neighbors that produced the gradient, or None when it did not come
+    from a pair.
+
+    A pair solves its 2x2 system exactly, so every pair whose gradient has
+    unit length scores ~0 ("perfect"): e.g. two pairs can give mirror-image
+    unit gradients. Perfect gradients (loss within ERROR_THRESHOLD) whose
+    projection x - sdf * g lands inside another circle are discarded (the
+    feasibility filter applied later anyway). If the feasible perfect ones
+    still point in more than one direction, the sample is ambiguous: it gets
+    no gradient here (zero, inf, None, True) and may inherit one later (see
+    estimate_gradients_RANSAC).
     """
     # Local coordinates relative to the center point c = `ind`: the linear model
     # sdf(n) - sdf(c) = g . (x_n - x_c) passes through (0, 0). Stacked over the
@@ -157,13 +173,11 @@ def estimate_gradient_exhaustive(points, sdf_values, ind, indices):
         grad = A_local[0] / np.linalg.norm(A_local[0])
         if b_local[0] < 0:
             grad *= -1.0
-        return grad, np.abs(A_local[0] @ grad - b_local[0]), None
+        return grad, np.abs(A_local[0] @ grad - b_local[0]), None, False
     if n_neighbors < 2:
-        return np.zeros(2), np.inf, None
+        return np.zeros(2), np.inf, None, False
 
-    best_loss = np.inf
-    best_gradient = np.zeros(2)
-    best_pair = None
+    cands = []                                    # (loss, gradient, pair)
     for i, j in itertools.combinations(range(n_neighbors), 2):
         # Candidate from the 2x2 subsystem of neighbors n_i, n_j:
         #   [ x_ni - x_c   y_ni - y_c ]   [ g_x ]   [ sdf(n_i) - sdf(c) ]
@@ -197,11 +211,27 @@ def estimate_gradient_exhaustive(points, sdf_values, ind, indices):
         # Score on the pair itself: mean of |A_sub @ g - b_sub| (2,) after g
         # was normalized to unit length
         loss = np.mean(np.abs(A_sub @ cand_grad - b_sub))
-        if loss < best_loss:
-            best_loss = loss
-            best_gradient = cand_grad
-            best_pair = (indices[i], indices[j])
-    return best_gradient, best_loss, best_pair
+        cands.append((loss, cand_grad, (indices[i], indices[j])))
+    if not cands:
+        return np.zeros(2), np.inf, None, False
+    cands.sort(key=lambda c: c[0])
+    radii = np.abs(sdf_values)
+    feasible = []
+    for loss, g, pair in cands:
+        if loss > ERROR_THRESHOLD:
+            break
+        q = points[ind] - sdf_values[ind] * g
+        inside = np.linalg.norm(points - q, axis=1) < radii - max(FEASIBILITY_TOL, 1e-12)
+        inside[ind] = False
+        if not inside.any():
+            feasible.append((loss, g, pair))
+    if not feasible:
+        loss, g, pair = cands[0]
+        return g, loss, pair, False
+    if any(np.linalg.norm(g - feasible[0][1]) > 1e-6 for _, g, _ in feasible[1:]):
+        return np.zeros(2), np.inf, None, True
+    loss, g, pair = feasible[0]
+    return g, loss, pair, False
 
 
 # =============================================================================
