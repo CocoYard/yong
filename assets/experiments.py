@@ -405,17 +405,21 @@ def merge_contour(V, edges):
     return ts, c, size, Vc, pos, nbrs
 
 
-def turning_and_grad(V, edges, at_q, h=0.0):
-    """Turning-angle energy of the contour polyline and dE/dV.
+def turning_and_grad(V, edges, Qp, h=0.0):
+    """Turning-angle energy of the contour polyline and its gradients dE/dV
+    and dE/dQp (Qp: the projection points).
 
     theta_i = the angle between the edges a -> v_i and v_i -> b at each vertex
     v_i with exactly two contour neighbors a, b (0 = straight); only the
     directions of the edges count. Power vertices joined by a zero-length
     contour edge (several triangles sharing one vertex) are merged first into
-    one vertex at their mean. Junctions, ends and vertices at a projection
-    point (at_q, per triangle) get no term: the contour is normally flat
-    through q (the tangent line of q's circle) and turns at the ends of that
-    segment, so a corner at q itself is a corner of the shape.
+    one vertex at their mean. Junctions and ends get no term. A corner at a
+    projection point is a corner of the shape (the contour is normally flat
+    through q, along the tangent line of q's circle, and turns at the ends of
+    that segment), so each vertex's term is scaled by w = min(1, d / h), d its
+    distance to the nearest projection point: 0 on a q, full from h away.
+    (A hard cutoff, 0 within 1e-6 of a q and 1 beyond, was a step the
+    optimizer would get stuck on; h <= 0 still uses it.)
 
     Without a scale (h <= 0), E = sum_i |theta_i|. That jumps by ~pi as soon
     as a q rotates off alignment and opens a tiny step whose two ends turn
@@ -427,20 +431,27 @@ def turning_and_grad(V, edges, at_q, h=0.0):
         P(i..j) = s_{i-1} * s_j * prod_{i <= e < j} (1 - s_e),
     with s = 1 for edges of length >= h (always kept). A tiny step (net turn
     0) then costs ~0 and a corner split by a tiny edge still costs its net
-    turn; at l = h it is the plain sum. Runs through a vertex without a term
-    cost 0, as that vertex would absorb them.
+    turn; at l = h it is the plain sum. Runs through a junction or end cost
+    0, as that vertex would absorb them; a run's w is its members' smallest.
 
     With e1 = v - a, e2 = b - v, theta = atan2(e1 x e2, e1 . e2), and
     perp(u) = (-u_y, u_x):
         dtheta/da = perp(e1) / |e1|^2
         dtheta/db = perp(e2) / |e2|^2
         dtheta/dv = -dtheta/da - dtheta/db
-    and for a short edge p - q, ds/dq = -ds/dp = (q - p) / (l h).
+    and for a short edge p - q, ds/dq = -ds/dp = (q - p) / (l h); where
+    d < h, dw/dv = -dw/dq = (v - q) / (d h).
     """
     ts, c, size, Vc, pos, nbrs = merge_contour(V, edges)
     k = len(Vc)
-    corner = np.zeros(k, bool)
-    corner[c[at_q[ts]]] = True
+    # weight from the distance to the nearest projection point
+    if len(Qp):
+        Dq = np.linalg.norm(Vc[:, None] - Qp[None], axis=2)
+        jq = Dq.argmin(1)
+        dq = Dq[np.arange(k), jq]
+    else:
+        jq, dq = np.zeros(k, int), np.full(k, np.inf)
+    wq = np.minimum(1.0, dq / h) if h > 0 else (dq >= 1e-6).astype(float)
 
     # turning angle and its gradient at every vertex with two neighbors
     perp = lambda u: np.stack([-u[:, 1], u[:, 0]], 1)
@@ -454,7 +465,7 @@ def turning_and_grad(V, edges, at_q, h=0.0):
         theta[two] = np.arctan2(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0], (e1 * e2).sum(1))
         da = perp(e1) / (e1 ** 2).sum(1)[:, None]
         db = perp(e2) / (e2 ** 2).sum(1)[:, None]
-        null[two] = corner[two]
+        null[two] = False
         first[two] = a2
 
     # short edges and the runs they join
@@ -474,6 +485,7 @@ def turning_and_grad(V, edges, at_q, h=0.0):
     E = 0.0
     gth = np.zeros(k)                                   # dE/dtheta
     gs = np.zeros(len(P))                               # dE/ds
+    gw = np.zeros(k)                                    # dE/dw
     seen = np.zeros(k, bool)
     for v0 in range(k):
         if seen[v0]:
@@ -519,13 +531,18 @@ def turning_and_grad(V, edges, at_q, h=0.0):
                     if base < 1e-15:
                         break                           # only shrinks as j grows
                     Pr = base * (s[se[j]] if j < m - 1 else 1.0)
+                    kw = path[i + int(np.argmin(wq[path[i:j + 1]]))]
+                    w = wq[kw]
+                    if w <= 0:
+                        break                           # longer runs contain it too
                     S = th[i:j + 1].sum()
-                    E += Pr * abs(S)
-                    gth[path[i:j + 1]] += Pr * np.sign(S) * sg[i:j + 1]
+                    E += Pr * abs(S) * w
+                    gth[path[i:j + 1]] += Pr * np.sign(S) * sg[i:j + 1] * w
+                    gw[kw] += Pr * abs(S)
                     for e in keep:
-                        gs[e] += abs(S) * Pr / s[e]
+                        gs[e] += abs(S) * Pr * w / s[e]
                     for e in cut:
-                        gs[e] -= abs(S) * Pr / (1 - s[e])
+                        gs[e] -= abs(S) * Pr * w / (1 - s[e])
 
     gVc = np.zeros((k, 2))
     if len(two):
@@ -538,9 +555,15 @@ def turning_and_grad(V, edges, at_q, h=0.0):
         w = (gs[sh] / h)[:, None]
         np.add.at(gVc, P[sh, 1], w * u)
         np.add.at(gVc, P[sh, 0], -w * u)
+    gQ = np.zeros_like(Qp)
+    if h > 0:
+        on = (dq < h) & (dq > 1e-15) & (gw != 0)
+        u = (Vc[on] - Qp[jq[on]]) / (dq[on] * h)[:, None] * gw[on][:, None]
+        gVc[on] += u
+        np.add.at(gQ, jq[on], -u)
     gV = np.zeros_like(V)
     gV[ts] = gVc[c] / size[c][:, None]
-    return E, gV
+    return E, gV, gQ
 
 
 def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0):
@@ -560,13 +583,15 @@ def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0):
             gV[t1] += u
             gV[t2] -= u
     E = 0.0
+    qsel = np.where(W == 0)[0]                          # projection points (and the far box)
+    gQ = None
     if tw and edges:
-        # power vertices on a projection point (a weight-0 site of their triangle)
-        q_site = W[T] == 0
-        at_q = (q_site & (np.linalg.norm(X[T] - V[:, None], axis=2) < 1e-6)).any(1)
-        E, gE = turning_and_grad(V, edges, at_q, h)
+        E, gE, gQ = turning_and_grad(V, edges, X[qsel], h)
         gV += tw * gE
-    return L, E, power_vertex_backprop(X, T, V, A, ok, gV)
+    gX = power_vertex_backprop(X, T, V, A, ok, gV)
+    if gQ is not None:
+        gX[qsel] += tw * gQ
+    return L, E, gX
 
 
 def power_vertex_backprop(X, T, V, A, ok, gV):

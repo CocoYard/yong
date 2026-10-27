@@ -1089,10 +1089,11 @@
         // in experiments.py: each edge shorter than h is contracted with
         // probability 1 - l / h, and the energy is the expected sum of |net
         // turning angle| over the resulting vertices (h <= 0: the plain sum).
-        // Also returns the plain sum of |turning angle|. Only vertices with
-        // exactly two contour neighbors count, and vertices at a projection
-        // point are skipped (a corner there is a corner of the shape); runs
-        // through them cost 0.
+        // Also returns the plain sum of |turning angle| (vertices at a projection
+        // point skipped). Only vertices with exactly two contour neighbors
+        // count; each term is scaled by min(1, d / h), d the vertex's distance
+        // to the nearest projection point (a corner there is a corner of the
+        // shape), a run by its members' smallest.
         // The contour as a graph: segment endpoints closer than tol merged
         // (grid hash with cells of size tol + union-find), and each segment
         // split at the vertices lying on it, since the segments come in
@@ -1165,17 +1166,23 @@
             const qs = points.filter((p) => p.proj);
             // signed, walking a -> v -> b with a = first[v]
             const theta = new Float64Array(V.length), isNull = V.map(() => true), first = V.map(() => -1);
+            // Weight min(1, d / h), d the distance to the nearest projection point
+            // (h <= 0: 0 within tol, else 1)
+            const wq = V.map((v) => {
+                let d = Infinity;
+                for (const q of qs) d = Math.min(d, Math.hypot(q.x - v.x, q.y - v.y));
+                return h > 0 ? Math.min(1, d / h) : d >= tol ? 1 : 0;
+            });
             let raw = 0;
             V.forEach((v, m) => {
                 if (nbrs[m].size !== 2) return;
-                if (qs.some((q) => Math.hypot(q.x - v.x, q.y - v.y) < tol)) return;
                 const [ia, ib] = [...nbrs[m]];
                 const a = V[ia], b = V[ib];
                 first[m] = ia;
                 const e1x = v.x - a.x, e1y = v.y - a.y, e2x = b.x - v.x, e2y = b.y - v.y;
                 theta[m] = Math.atan2(e1x * e2y - e1y * e2x, e1x * e2x + e1y * e2y);
                 isNull[m] = false;
-                raw += Math.abs(theta[m]);
+                if (qs.every((q) => Math.hypot(q.x - v.x, q.y - v.y) >= tol)) raw += Math.abs(theta[m]);
             });
 
             // Short edges (s = l / h < 1) and the runs of vertices they join
@@ -1224,15 +1231,17 @@
                         return first[v] === prev ? theta[v] : -theta[v];
                     });
                     for (let i = 0; i < m; i++) {
-                        let S = 0, cut = 1;
+                        let S = 0, cut = 1, w = 1;
                         for (let j = i; j < m; j++) {
                             if (isNull[path[j]]) break;
+                            w = Math.min(w, wq[path[j]]);     // a run's weight: its members' smallest
+                            if (w <= 0) break;
                             if (j > i) cut *= 1 - se[j - 1];
                             const base = (i > 0 ? se[i - 1] : 1) * cut;
                             if (base < 1e-15) break;    // only shrinks as j grows
                             const pr = base * (j < m - 1 ? se[j] : 1);
                             S += th[j];
-                            total += pr * Math.abs(S);
+                            total += pr * Math.abs(S) * w;
                         }
                     }
                 }
