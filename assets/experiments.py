@@ -1088,7 +1088,8 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
     turning_only the turning-angle energy alone, by projected gradient
     descent starting from proj0 (N, 2).
     NaN rows (dropped estimates) start from their circle center's projection
-    onto the power contour of all circles plus the kept points; each start
+    onto the power contour of all circles plus the kept points (with rope,
+    onto the rope through the kept points instead); each start
     angle also picks the exposed arc (or, for a corner, the exposed point).
     Corner circles stay fixed. Returns (N, 2); NaN for circles without an
     exposed arc."""
@@ -1101,7 +1102,12 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
         X = np.vstack([xy, proj0[kept], box])
         W = np.concatenate([R ** 2, np.zeros(kept.sum() + 4)])
         lab = np.concatenate([S, -S[kept], np.ones(4, int)])
-        segs = contour_segments(X, W, lab)
+        if rope:
+            n, m = len(xy), kept.sum()
+            paths = rope_terms(X, W, lab, n, np.arange(n, n + m), xy[kept], rope_flat, with_paths=True)[6]
+            segs = np.array([(P[i], P[i + 1]) for P in paths for i in range(len(P) - 1)]).reshape(-1, 2, 2)
+        else:
+            segs = contour_segments(X, W, lab)
         if len(segs):
             proj0 = proj0.copy()
             proj0[missing] = closest_on_segments(xy[missing], segs)
