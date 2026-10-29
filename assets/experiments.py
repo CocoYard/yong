@@ -15,7 +15,7 @@ from scipy.spatial import ConvexHull
 
 # Filters applied after estimation (normalized units)
 ERROR_THRESHOLD = 1e-8   # drop a projection whose RANSAC error exceeds this
-FEASIBILITY_TOL = 1e-3   # inside circle j means |q - x_j| < r_j - tol; slack for curved boundaries
+FEASIBILITY_TOL = 1e-8   # inside circle j means |q - x_j| < r_j - tol; slack for curved boundaries
 
 
 def regular_triangulation_neighbors(xy, r):
