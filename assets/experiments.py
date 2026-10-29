@@ -272,6 +272,8 @@ TWO_PI = 2 * np.pi
 
 # Refinement settings
 REFINE_ITERS = 400       # projected gradient descent iterations
+CD_OUTER = 50            # coordinate descent: max rounds over all points
+CD_INNER = 5             # coordinate descent: max 1D steps per point per round
 LENGTH_WEIGHT = 1.0      # weight of the contour length in the refine objective
                          # (turning_only sets it to 0)
 
@@ -480,14 +482,14 @@ def turning_and_grad(V, edges, Qp, h=0.0):
     return E, gV, np.zeros_like(Qp)
 
 
-def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0, own=None, length_mode="all"):
+def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0, own=None, length_mode="all", grad=True):
     """Contour length L, turning-angle energy E (see turning_and_grad) and the
     gradient of lw * L + tw * E w.r.t. all site positions (weights held fixed).
 
     length_mode "all": L = sum of the contour edge lengths; "free": skipping
     the tangent edges, between a projection point j and its own circle own[j]
     (own: site -> its circle, -1 for the rest); "free_sq": sum of the squared
-    lengths of those."""
+    lengths of those. grad=False skips the backprop to the sites (gX None)."""
     T, Vplane = regular_triangulation(X, W)
     V, A, ok = power_vertices(X, W, T, Vplane)
     edges = contour_edges(T, labels)
@@ -513,6 +515,8 @@ def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0, own=None, lengt
     if tw and edges:
         E, gE, gQ = turning_and_grad(V, edges, X[qsel], h)
         gV += tw * gE
+    if not grad:
+        return L, E, None
     gX = power_vertex_backprop(X, T, V, A, ok, gV)
     if gQ is not None:
         gX[qsel] += tw * gQ
@@ -939,6 +943,16 @@ class Problem:
         gth[~self.free] = 0.0
         return f, gth
 
+    def value(self, theta):
+        """Objective of eval without its gradient (the contour's skips the
+        backprop; the rope still computes everything)."""
+        if self.rope:
+            return self.eval(theta)[0]
+        X, W, lab = self.sites(theta)
+        L, E, _ = contour_length_and_grad(X, W, lab, self.lw, self.tw, self.h, self.own, self.length_mode,
+                                          grad=False)
+        return self.lw * L + self.tw * E
+
     def length_and_turning(self, theta):
         X, W, lab = self.sites(theta)
         L, E, _ = contour_length_and_grad(X, W, lab, 0.0, 1.0, self.h, self.own, self.length_mode)
@@ -977,6 +991,101 @@ def optimize(prob, theta0, iters=400, tol=1e-12):
         if dL < tol:
             break
     return th, np.array(hist)
+
+
+def rprop(prob, theta0, iters=400, tol=1e-12, t0=1e-3, tmin=1e-9, tmax=0.2, margin=1e-6):
+    """iRprop+ polish after optimize: each angle has its own step, grown x1.2
+    while its gradient keeps its sign and halved on a flip (undoing its last
+    move if f went up), so an angle stuck at a kink of the contour length no
+    longer stalls the rest (optimize's shared Armijo step shrinks to ~1e-7
+    there). Angles stay margin inside their arcs: at an exact arc end q lies
+    on another circle and the power-vertex gradient is degenerate (wrong sign).
+    Returns the best iterate (theta0 itself if nothing beats it: the margin
+    shift alone can cross a jump of the turning term) and the history of f."""
+    lo, hi = prob.lo + margin, prob.hi - margin
+    fixed = ~prob.free
+    def proj(th):
+        return np.where(fixed, prob.project(th), np.clip(th, lo, np.maximum(lo, hi)))
+    best_f, best_th = prob.eval(theta0)[0], theta0.copy()
+    th = proj(theta0.copy())
+    f, g = prob.eval(th)
+    if f < best_f:
+        best_f, best_th = f, th.copy()
+    hist = [best_f, f]
+    t = np.full_like(th, t0)
+    gprev = np.zeros_like(th)
+    dth = np.zeros_like(th)
+    fprev = f
+    stall = 0
+    for _ in range(iters):
+        g = np.where(((th <= lo) & (g > 0)) | ((th >= hi) & (g < 0)) | fixed, 0.0, g)   # projected
+        s = g * gprev
+        t = np.where(s > 0, t * 1.2, np.where(s < 0, t * 0.5, t)).clip(tmin, tmax)
+        step = np.where(s < 0, -dth if f > fprev else 0.0, -t * np.sign(g))
+        g = np.where(s < 0, 0.0, g)                      # no sign test right after a flip
+        th_new = proj(th + step)
+        dth, fprev, gprev, th = th_new - th, f, g, th_new
+        f, g = prob.eval(th)
+        hist.append(f)
+        if f < best_f - tol:
+            best_f, best_th, stall = f, th.copy(), 0
+        else:
+            stall += 1
+        if stall >= 30 or np.all(t <= tmin):
+            break
+    return best_th, np.array(hist)
+
+
+def coord_descent(prob, theta0, outer=CD_OUTER, inner=CD_INNER, t0=1e-2, tmin=1e-7, tol=1e-9, margin=1e-6):
+    """Polish after rprop: each round moves the points one at a time, the
+    others fixed. Point i takes up to `inner` 1D steps, against the sign of
+    its gradient first, else the other way; a step is kept only if f drops
+    (doubling i's step, else halving it), so a point that would jump the
+    turning term (a contour vertex leaving a q) no longer blocks the others,
+    as it does a joint step. Only the start needs a gradient: after that each
+    point first retries the direction that last worked for it, and the trials
+    evaluate f alone (prob.value). Every trial rebuilds the power diagram.
+    Stops after `outer` rounds or a round that gains < tol.
+    Returns (theta, f, rounds).
+
+    TODO: move a point by deleting and reinserting it in the regular
+    triangulation and update f locally (only the triangles around its old
+    and new position change, and with them their contour edges and turning
+    terms) instead of rebuilding everything per trial. qhull's rebuild is
+    only ~10% of a trial; most of it is recomputing the whole contour in
+    Python, so the local f bookkeeping is what pays off. Needs an
+    incremental regular triangulation (scipy has none; CGAL's Python
+    bindings or our own) and care with the turning term's merged vertices
+    and vertices at a q."""
+    lo, hi = prob.lo + margin, prob.hi - margin
+    th = theta0.copy()
+    f, g = prob.eval(th)
+    pref = -np.sign(g)
+    pref[pref == 0] = 1.0
+    t = np.full_like(th, t0)
+    for r in range(outer):
+        f_round = f
+        for i in np.where(prob.free)[0]:
+            for _ in range(inner):
+                moved = False
+                for dd in (pref[i], -pref[i]):
+                    trial = th.copy()
+                    trial[i] = np.clip(th[i] + dd * t[i], lo[i], max(lo[i], hi[i]))
+                    if trial[i] == th[i]:
+                        continue
+                    f2 = prob.value(trial)
+                    if f2 < f - tol:
+                        th, f, moved, pref[i] = trial, f2, True, dd
+                        break
+                if moved:
+                    t[i] = min(2 * t[i], 0.5)
+                else:
+                    t[i] = max(0.5 * t[i], tmin)
+                    if t[i] == tmin:
+                        break
+        if f_round - f < tol:
+            break
+    return th, f, r + 1
 
 
 def sample_spacing(xy):
@@ -1028,12 +1137,16 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
     L0, E0 = p.length_and_turning(th)
     R0, RE0 = p.rope_length_and_turning(th)
     th, hist = optimize(p, th, iters=REFINE_ITERS)
+    f_gd = hist[-1]
+    th, hist_rp = rprop(p, th, iters=REFINE_ITERS)
+    th, f_cd, cd_rounds = coord_descent(p, th)
     q = p.q_of(th)
     q[~p.has_q] = np.nan
     L1, E1 = p.length_and_turning(th)
     R1, RE1 = p.rope_length_and_turning(th)
     print(f"  refine{' (rope)' if rope else ''}: contour length [{length_mode}] {L0:.4f} -> {L1:.4f}, turning {E0:.4f} -> {E1:.4f}; "
           f"rope length {R0:.4f} -> {R1:.4f}, turning {RE0:.4f} -> {RE1:.4f} "
-          f"(weights: length {lw:g}, turning {tw:g}, h = {turning_h:g} x spacing; {len(hist) - 1} iters); "
+          f"(weights: length {lw:g}, turning {tw:g}, h = {turning_h:g} x spacing; {len(hist) - 1} GD iters -> {f_gd:.4f}, "
+          f"{len(hist_rp) - 1} Rprop iters -> {hist_rp.min():.4f}, {cd_rounds} CD rounds -> {f_cd:.4f}); "
           f"{p.free.sum()} free, {p.is_corner.sum()} fixed corners, {(~p.has_q).sum()} without exposed arc")
     return q
