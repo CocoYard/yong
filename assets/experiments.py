@@ -115,10 +115,12 @@ def estimate_gradients_RANSAC(points, sdf_values, neighbors, inherit=True):
 
     The gradient a sample c solves from its neighbor pair (n_i, n_j) fits the
     linear model through all three points, so it is also a gradient for n_i and
-    n_j. Neighborhoods are not transitive, so n_i may not find a usable gradient
-    from its own neighbors, or may find several (ambiguous); such samples
-    inherit the lowest-error gradient among those solved, unambiguously, by
-    samples that used them in their pair.
+    n_j, and for any other neighbor n of c the model fits (residual within
+    ERROR_THRESHOLD): several pairs often give the same plane, and which of
+    them c picks comes down to rounding. Neighborhoods are not transitive, so
+    such a neighbor may not find a usable gradient from its own neighbors, or
+    may find several (ambiguous); it inherits the lowest-error gradient among
+    those solved, unambiguously, by samples whose model fits it.
     """
     n = points.shape[0]
     gradients = np.zeros_like(points)
@@ -130,9 +132,12 @@ def estimate_gradients_RANSAC(points, sdf_values, neighbors, inherit=True):
         gradients[c], errors[c], pair, ambiguous[c] = estimate_gradient_exhaustive(points, sdf_values, c, neighbors[c])
         if pair is None:
             continue
-        for m in pair:
-            if errors[c] < donor_err[m]:
-                donor_err[m] = errors[c]
+        # every neighbor the model fits, the pair included
+        res = np.abs(sdf_values[c] + (points[neighbors[c]] - points[c]) @ gradients[c] - sdf_values[neighbors[c]])
+        for m, r in zip(neighbors[c], res):
+            e = errors[c] if m in pair else max(errors[c], r)
+            if (m in pair or r <= ERROR_THRESHOLD) and e < donor_err[m]:
+                donor_err[m] = e
                 donor_grad[m] = gradients[c]
 
     usable = (np.linalg.norm(gradients, axis=1) >= 0.5) & (errors <= ERROR_THRESHOLD)
