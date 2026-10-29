@@ -416,163 +416,68 @@ def merge_contour(V, edges):
 
 def turning_and_grad(V, edges, Qp, h=0.0):
     """Turning-angle energy of the contour polyline and its gradients dE/dV
-    and dE/dQp (Qp: the projection points).
+    and dE/dQp (Qp: the projection points; always 0 here).
 
     theta_i = the angle between the edges a -> v_i and v_i -> b at each vertex
     v_i with exactly two contour neighbors a, b (0 = straight); only the
     directions of the edges count. Power vertices joined by a zero-length
     contour edge (several triangles sharing one vertex) are merged first into
-    one vertex at their mean. Junctions and ends get no term. A corner at a
-    projection point is a corner of the shape (the contour is normally flat
-    through q, along the tangent line of q's circle, and turns at the ends of
-    that segment), so each vertex's term is scaled by w = min(1, d / h), d its
-    distance to the nearest projection point: 0 on a q, full from h away.
-    (A hard cutoff, 0 within 1e-6 of a q and 1 beyond, was a step the
-    optimizer would get stuck on; h <= 0 still uses it.)
+    one vertex at their mean. Junctions, ends and vertices within 1e-6 of a
+    projection point get no term: the contour is normally flat through q
+    (the tangent line of q's circle) and turns at the ends of that segment,
+    so a corner at q itself is a corner of the shape.
 
     Without a scale (h <= 0), E = sum_i |theta_i|. That jumps by ~pi as soon
     as a q rotates off alignment and opens a tiny step whose two ends turn
-    ~90 degrees each, however short the step. So an edge shorter than h is
-    contracted with probability 1 - s, s = l / h, independently per edge, and
-    E is the expected sum of |net turning| over the vertices that result:
-    a run v_i..v_j merged into one vertex turns by theta_i + ... + theta_j, so
-        E = sum over runs [i..j] of P(i..j) * |theta_i + ... + theta_j|,
-        P(i..j) = s_{i-1} * s_j * prod_{i <= e < j} (1 - s_e),
-    with s = 1 for edges of length >= h (always kept). A tiny step (net turn
-    0) then costs ~0 and a corner split by a tiny edge still costs its net
-    turn; at l = h it is the plain sum. Runs through a junction or end cost
-    0, as that vertex would absorb them; a run's w is its members' smallest.
+    ~90 degrees each, however short the step. So each term is scaled by
+    c_i = min(1, (l_a + l_b) / (2 h)), l_a, l_b the lengths of its two edges:
+        E = sum_i c_i * |theta_i|.
 
     With e1 = v - a, e2 = b - v, theta = atan2(e1 x e2, e1 . e2), and
     perp(u) = (-u_y, u_x):
         dtheta/da = perp(e1) / |e1|^2
         dtheta/db = perp(e2) / |e2|^2
         dtheta/dv = -dtheta/da - dtheta/db
-    and for a short edge p - q, ds/dq = -ds/dp = (q - p) / (l h); where
-    d < h, dw/dv = -dw/dq = (v - q) / (d h).
+    and where c < 1, dc/dl = 1 / (2 h) for both edges.
     """
     ts, c, size, Vc, pos, nbrs = merge_contour(V, edges)
     k = len(Vc)
-    # weight from the distance to the nearest projection point
     if len(Qp):
-        Dq = np.linalg.norm(Vc[:, None] - Qp[None], axis=2)
-        jq = Dq.argmin(1)
-        dq = Dq[np.arange(k), jq]
+        on_q = np.linalg.norm(Vc[:, None] - Qp[None], axis=2).min(1) < 1e-6
     else:
-        jq, dq = np.zeros(k, int), np.full(k, np.inf)
-    wq = np.minimum(1.0, dq / h) if h > 0 else (dq >= 1e-6).astype(float)
-
-    # turning angle and its gradient at every vertex with two neighbors
-    perp = lambda u: np.stack([-u[:, 1], u[:, 0]], 1)
-    two = np.array([i for i in range(k) if len(nbrs[i]) == 2], int)
-    theta = np.zeros(k)                                 # signed, walking a -> v -> b
-    first = np.full(k, -1)                              # a of each vertex
-    null = np.ones(k, bool)                             # no term of its own
-    if len(two):
-        a2, b2 = np.array([sorted(nbrs[i]) for i in two]).T
-        e1, e2 = Vc[two] - Vc[a2], Vc[b2] - Vc[two]
-        theta[two] = np.arctan2(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0], (e1 * e2).sum(1))
-        da = perp(e1) / (e1 ** 2).sum(1)[:, None]
-        db = perp(e2) / (e2 ** 2).sum(1)[:, None]
-        null[two] = False
-        first[two] = a2
-
-    # short edges and the runs they join
-    P = np.array(sorted({(min(i, j), max(i, j)) for i in range(k) for j in nbrs[i]}), int).reshape(-1, 2)
-    ell = np.linalg.norm(Vc[P[:, 1]] - Vc[P[:, 0]], axis=1)
-    sh = np.where(ell < h)[0] if h > 0 else np.zeros(0, int)
-    s_of = {}                                           # (i, j) -> short edge index
-    adj = [[] for _ in range(k)]
-    for e in sh:
-        i, j = P[e]
-        s_of[i, j] = s_of[j, i] = e
-        adj[i].append(j)
-        adj[j].append(i)
-    s = np.ones(len(P))
-    s[sh] = ell[sh] / h
-
-    E = 0.0
-    gth = np.zeros(k)                                   # dE/dtheta
-    gs = np.zeros(len(P))                               # dE/ds
-    gw = np.zeros(k)                                    # dE/dw
-    seen = np.zeros(k, bool)
-    for v0 in range(k):
-        if seen[v0]:
-            continue
-        # component of v0 under short edges; ordered if it is a path
-        comp, stack = [], [v0]
-        seen[v0] = True
-        while stack:
-            u = stack.pop()
-            comp.append(u)
-            for w in adj[u]:
-                if not seen[w]:
-                    seen[w] = True
-                    stack.append(w)
-        n_e = sum(len(adj[u]) for u in comp) // 2
-        if len(comp) > 1 and n_e == len(comp) - 1 and max(len(adj[u]) for u in comp) <= 2:
-            u = next(u for u in comp if len(adj[u]) == 1)
-            path = [u]
-            while len(path) < len(comp):
-                u = next(w for w in adj[path[-1]] if len(path) < 2 or w != path[-2])
-                path.append(u)
-            runs = [path]
-        else:
-            runs = [[u] for u in comp]                  # single vertices (or an odd tangle)
-        for path in runs:
-            m = len(path)
-            se = [s_of[path[t], path[t + 1]] for t in range(m - 1)]
-            # signs that turn each theta into the one walking along the path,
-            # so a run's angles add up to its net turn
-            sg = np.ones(m)
-            if m > 1:
-                for t, v in enumerate(path):
-                    prev = path[t - 1] if t > 0 else next(iter(nbrs[v] - {path[1]}), -1)
-                    sg[t] = 1.0 if first[v] == prev else -1.0
-            th = theta[path] * sg
-            for i in range(m):
-                for j in range(i, m):
-                    if null[path[i:j + 1]].any():
-                        break                           # longer runs contain it too
-                    keep = ([se[i - 1]] if i > 0 else []) + ([se[j]] if j < m - 1 else [])
-                    cut = se[i:j]
-                    base = (s[se[i - 1]] if i > 0 else 1.0) * np.prod(1 - s[cut])
-                    if base < 1e-15:
-                        break                           # only shrinks as j grows
-                    Pr = base * (s[se[j]] if j < m - 1 else 1.0)
-                    kw = path[i + int(np.argmin(wq[path[i:j + 1]]))]
-                    w = wq[kw]
-                    if w <= 0:
-                        break                           # longer runs contain it too
-                    S = th[i:j + 1].sum()
-                    E += Pr * abs(S) * w
-                    gth[path[i:j + 1]] += Pr * np.sign(S) * sg[i:j + 1] * w
-                    gw[kw] += Pr * abs(S)
-                    for e in keep:
-                        gs[e] += abs(S) * Pr * w / s[e]
-                    for e in cut:
-                        gs[e] -= abs(S) * Pr * w / (1 - s[e])
+        on_q = np.zeros(k, bool)
 
     gVc = np.zeros((k, 2))
+    E = 0.0
+    two = np.array([i for i in range(k) if len(nbrs[i]) == 2 and not on_q[i]], int)
     if len(two):
-        w = gth[two][:, None]
-        np.add.at(gVc, a2, w * da)
-        np.add.at(gVc, b2, w * db)
-        np.add.at(gVc, two, -w * (da + db))
-    if len(sh):
-        u = (Vc[P[sh, 1]] - Vc[P[sh, 0]]) / ell[sh][:, None]
-        w = (gs[sh] / h)[:, None]
-        np.add.at(gVc, P[sh, 1], w * u)
-        np.add.at(gVc, P[sh, 0], -w * u)
-    gQ = np.zeros_like(Qp)
-    if h > 0:
-        on = (dq < h) & (dq > 1e-15) & (gw != 0)
-        u = (Vc[on] - Qp[jq[on]]) / (dq[on] * h)[:, None] * gw[on][:, None]
-        gVc[on] += u
-        np.add.at(gQ, jq[on], -u)
+        perp = lambda u: np.stack([-u[:, 1], u[:, 0]], 1)
+        a2, b2 = np.array([sorted(nbrs[i]) for i in two]).T
+        e1, e2 = Vc[two] - Vc[a2], Vc[b2] - Vc[two]
+        theta = np.arctan2(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0], (e1 * e2).sum(1))
+        l1, l2 = np.linalg.norm(e1, axis=1), np.linalg.norm(e2, axis=1)
+        cs = np.minimum(1.0, (l1 + l2) / (2 * h)) if h > 0 else np.ones(len(two))
+        E = float((cs * np.abs(theta)).sum())
+        # through theta
+        gt = (cs * np.sign(theta))[:, None]
+        da = perp(e1) / (l1 ** 2)[:, None]
+        db = perp(e2) / (l2 ** 2)[:, None]
+        np.add.at(gVc, a2, gt * da)
+        np.add.at(gVc, b2, gt * db)
+        np.add.at(gVc, two, -gt * (da + db))
+        # through c (only where c < 1)
+        if h > 0:
+            sh = cs < 1
+            g = (np.abs(theta[sh]) / (2 * h))[:, None]
+            u1 = e1[sh] / l1[sh][:, None] * g
+            u2 = e2[sh] / l2[sh][:, None] * g
+            np.add.at(gVc, two[sh], u1 - u2)
+            np.add.at(gVc, a2[sh], -u1)
+            np.add.at(gVc, b2[sh], u2)
+
     gV = np.zeros_like(V)
     gV[ts] = gVc[c] / size[c][:, None]
-    return E, gV, gQ
+    return E, gV, np.zeros_like(Qp)
 
 
 def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0, own=None, length_mode="all"):
