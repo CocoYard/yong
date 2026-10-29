@@ -892,6 +892,9 @@ class Problem:
                 t = 0.5 * (lo + hi)
             self.lo[i], self.hi[i], self.theta_ref[i] = lo, hi, t
         self.is_corner = self.has_q & ((self.hi - self.lo) < 1e-6)
+        # a fully exposed circle has no arc ends: theta is periodic, never clamped
+        full = self.has_q & ((self.hi - self.lo) >= TWO_PI - 1e-12)
+        self.lo[full], self.hi[full] = -np.inf, np.inf
         self.free = self.has_q & ~self.is_corner
         self.qidx = np.where(self.has_q)[0]
         # each site's own circle (projection points), -1 for the rest
