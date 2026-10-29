@@ -44,7 +44,7 @@ def covered_by_other_circle(q, xy, r, tol=None):
 
 
 def estimate_projections(xy, sdf, loops, inherit=True, refine=False, turning=0.0, turning_only=False,
-                         turning_h=0.1, rope=False, rope_flat=10.0):
+                         turning_h=0.1, rope=False, rope_flat=10.0, length_mode="all"):
     """Estimated projection point for each sample.
 
     xy: (N, 2) sample positions, sdf: (N,) signed distances (negative inside),
@@ -65,6 +65,10 @@ def estimate_projections(xy, sdf, loops, inherit=True, refine=False, turning=0.0
         are joined straight instead of through their tangents' corner.
     turning_h: scale h of the turning-angle term, as a fraction of the
         sample spacing (page input, see turning_and_grad and sample_spacing).
+    length_mode: the contour length term of the refine: "all" (every contour
+        edge), "free" (skipping the tangent edges at projection points, i.e.
+        between a projection point and its own circle) or "free_sq" (those,
+        squared); see contour_length_and_grad (page select).
     Returns (N, 2); a row of NaNs drops that sample's projection point.
 
     RANSAC-style: the gradient at each sample is fit from pairs of its regular
@@ -90,7 +94,7 @@ def estimate_projections(xy, sdf, loops, inherit=True, refine=False, turning=0.0
           f"{high_err.sum()} error > {ERROR_THRESHOLD}, "
           f"{infeasible.sum()} inside another circle")
     if refine:
-        proj = refine_projections(xy, sdf, proj, turning, turning_only, turning_h, rope, rope_flat)
+        proj = refine_projections(xy, sdf, proj, turning, turning_only, turning_h, rope, rope_flat, length_mode)
     return proj
 
 
@@ -566,20 +570,31 @@ def turning_and_grad(V, edges, Qp, h=0.0):
     return E, gV, gQ
 
 
-def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0):
+def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0, own=None, length_mode="all"):
     """Contour length L, turning-angle energy E (see turning_and_grad) and the
-    gradient of lw * L + tw * E w.r.t. all site positions (weights held fixed)."""
+    gradient of lw * L + tw * E w.r.t. all site positions (weights held fixed).
+
+    length_mode "all": L = sum of the contour edge lengths; "free": skipping
+    the tangent edges, between a projection point j and its own circle own[j]
+    (own: site -> its circle, -1 for the rest); "free_sq": sum of the squared
+    lengths of those."""
     T, Vplane = regular_triangulation(X, W)
     V, A, ok = power_vertices(X, W, T, Vplane)
     edges = contour_edges(T, labels)
     L = 0.0
     gV = np.zeros_like(V)
     for a, b, t1, t2 in edges:
+        if length_mode != "all" and (own[a] == b or own[b] == a):
+            continue                                    # a tangent edge
         d = V[t1] - V[t2]
         l = np.hypot(*d)
-        L += l
-        if lw and l > 1e-14:
-            u = lw * d / l
+        if length_mode == "free_sq":
+            L += l * l
+            u = 2 * lw * d
+        else:
+            L += l
+            u = lw * d / l if l > 1e-14 else 0 * d
+        if lw:
             gV[t1] += u
             gV[t2] -= u
     E = 0.0
@@ -949,8 +964,10 @@ class Problem:
     Corner circles (exposed set = a single point) keep q frozen there.
     """
 
-    def __init__(self, C, R, S, theta_ref, box=20.0, lw=1.0, tw=0.0, h=0.0, rope=False, flat_deg=10.0):
+    def __init__(self, C, R, S, theta_ref, box=20.0, lw=1.0, tw=0.0, h=0.0, rope=False, flat_deg=10.0,
+                 length_mode="all"):
         self.C, self.R, self.S = C, R, S
+        self.length_mode = length_mode
         self.lw, self.tw, self.h, self.rope, self.flat_deg = lw, tw, h, rope, flat_deg
         n = len(C)
         self.arcs = [free_arcs(i, C, R) if R[i] > 1e-12 else [] for i in range(n)]
@@ -967,6 +984,10 @@ class Problem:
         self.is_corner = self.has_q & ((self.hi - self.lo) < 1e-6)
         self.free = self.has_q & ~self.is_corner
         self.qidx = np.where(self.has_q)[0]
+        # each site's own circle (projection points), -1 for the rest
+        m = len(self.qidx)
+        self.own = np.full(n + m + 4, -1)
+        self.own[n:n + m] = self.qidx
 
         # fixed sites: circles + box
         self.box = box * np.array([[-1, -1], [1, -1], [1, 1], [-1, 1]], float)
@@ -991,7 +1012,7 @@ class Problem:
         gth = np.zeros(n)
         f = 0.0
         if not self.rope:
-            L, E, gX = contour_length_and_grad(X, W, lab, self.lw, self.tw, self.h)
+            L, E, gX = contour_length_and_grad(X, W, lab, self.lw, self.tw, self.h, self.own, self.length_mode)
             gq[self.qidx] = gX[n:n + m]
             f = self.lw * L + self.tw * E
         else:
@@ -1007,7 +1028,7 @@ class Problem:
 
     def length_and_turning(self, theta):
         X, W, lab = self.sites(theta)
-        L, E, _ = contour_length_and_grad(X, W, lab, 0.0, 1.0, self.h)
+        L, E, _ = contour_length_and_grad(X, W, lab, 0.0, 1.0, self.h, self.own, self.length_mode)
         return L, E
 
     def rope_length_and_turning(self, theta):
@@ -1054,7 +1075,7 @@ def sample_spacing(xy):
 
 
 def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_h=0.1, rope=False,
-                       rope_flat=10.0):
+                       rope_flat=10.0, length_mode="all"):
     """Move each projection point along the exposed arcs of its circle to
     minimize LENGTH_WEIGHT * the power-contour length + turning * its
     turning-angle energy (scale h = turning_h * sample_spacing(xy)), both of
@@ -1083,7 +1104,7 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
     theta_ref = np.arctan2(d[:, 1], d[:, 0])          # NaN where proj0 is NaN
     lw, tw = (0.0, 1.0) if turning_only else (LENGTH_WEIGHT, turning)
     p = Problem(xy, R, S, theta_ref, lw=lw, tw=tw, h=turning_h * sample_spacing(xy), rope=rope,
-                flat_deg=rope_flat)
+                flat_deg=rope_flat, length_mode=length_mode)
     th = p.theta_ref.copy()
     L0, E0 = p.length_and_turning(th)
     R0, RE0 = p.rope_length_and_turning(th)
@@ -1092,7 +1113,7 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
     q[~p.has_q] = np.nan
     L1, E1 = p.length_and_turning(th)
     R1, RE1 = p.rope_length_and_turning(th)
-    print(f"  refine{' (rope)' if rope else ''}: contour length {L0:.4f} -> {L1:.4f}, turning {E0:.4f} -> {E1:.4f}; "
+    print(f"  refine{' (rope)' if rope else ''}: contour length [{length_mode}] {L0:.4f} -> {L1:.4f}, turning {E0:.4f} -> {E1:.4f}; "
           f"rope length {R0:.4f} -> {R1:.4f}, turning {RE0:.4f} -> {RE1:.4f} "
           f"(weights: length {lw:g}, turning {tw:g}, h = {turning_h:g} x spacing; {len(hist) - 1} iters); "
           f"{p.free.sum()} free, {p.is_corner.sum()} fixed corners, {(~p.has_q).sum()} without exposed arc")

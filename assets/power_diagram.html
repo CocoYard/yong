@@ -154,9 +154,17 @@
                         <div class="info-text" hidden>
                             <p>Slide each projection point along its circle to minimize <b>L + w·T</b> (or <b>T</b> with Turning only).</p>
                             <p>With <i>Use rope</i>, L and T are the rope's instead of the contour's: the projection points joined in contour order, straight or through the corner of their tangents (see Rope flat angle), else along the contour without cutting into a circle; its T counts every vertex.</p>
-                            <p><b>L</b>: contour length.<br><b>T</b> = Σ<sub>runs i..j</sub> P·c·|θ<sub>i</sub>+…+θ<sub>j</sub>|, θ the turning angle at a contour vertex.<br>P = s<sub>i−1</sub>·s<sub>j</sub>·Π<sub>i≤e&lt;j</sub>(1−s<sub>e</sub>), s<sub>e</sub> = min(1, l<sub>e</sub>/h): the chance that the short edges merge vertices i..j into one.<br>c = min(1, d/h) over the run, d the distance to the nearest projection point (rope: c = 1).</p>
+                            <p><b>L</b>: contour length; with <i>Length</i> set to non-tangent edges, without the edges between a projection point and its own circle (squared: Σ l²).<br><b>T</b> = Σ<sub>runs i..j</sub> P·c·|θ<sub>i</sub>+…+θ<sub>j</sub>|, θ the turning angle at a contour vertex.<br>P = s<sub>i−1</sub>·s<sub>j</sub>·Π<sub>i≤e&lt;j</sub>(1−s<sub>e</sub>), s<sub>e</sub> = min(1, l<sub>e</sub>/h): the chance that the short edges merge vertices i..j into one.<br>c = min(1, d/h) over the run, d the distance to the nearest projection point (rope: c = 1).</p>
                             <p><b>Weight</b>: w. Right of it: T of the shown contour (or rope), and the plain Σ|θ| without h.<br><b>Turning scale h</b>: × sample spacing.</p>
                         </div>
+                    </div>
+                    <div class="row" style="margin-left: 44px;">
+                        Length:
+                        <select id="lengthMode">
+                            <option value="all">all edges</option>
+                            <option value="free">non-tangent edges</option>
+                            <option value="free_sq">non-tangent edges, squared</option>
+                        </select>
                     </div>
                     <div class="row" style="margin-left: 44px; flex-wrap: wrap; row-gap: 4px;">
                         Turning-angle weight:
@@ -694,6 +702,9 @@
             document.getElementById('turnWeight').disabled = e.target.checked;
             if (projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
         });
+        document.getElementById('lengthMode').addEventListener('change', () => {
+            if (projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
+        });
         document.getElementById('turnH').addEventListener('change', (e) => {
             let v = parseFloat(e.target.value);
             if (!(v >= 0)) v = 0;
@@ -751,6 +762,7 @@
                     rope: document.getElementById('ropeOpt').checked,
                     rope_flat: parseFloat(document.getElementById('ropeFlat').value) || 0,
                     turning_h: parseFloat(document.getElementById('turnH').value) || 0,
+                    length_mode: document.getElementById('lengthMode').value,
                 },
             };
         }
