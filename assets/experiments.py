@@ -18,6 +18,12 @@ ERROR_THRESHOLD = 1e-8   # drop a projection whose RANSAC error exceeds this
 FEASIBILITY_TOL = 1e-8   # inside circle j means |q - x_j| < r_j - tol; slack for curved boundaries
 
 
+# Normalization of the last refine (see refine_projections), passed on to the
+# page by estimate_server.py: {"k", "L0" (the length the objective divides by
+# k / L0), "length_weight", "length_mode", "rope", "contour_L0", "rope_L0"} or None
+LAST_NORM = None
+
+
 def regular_triangulation_neighbors(xy, r):
     """Neighbors of each weighted point (center xy[i], radius r[i]) in the regular
     triangulation: the lower convex hull of the lifted points (x, y, |x|^2 - r^2).
@@ -78,6 +84,8 @@ def estimate_projections(xy, sdf, loops, inherit=True, refine=False, turning=0.0
     ERROR_THRESHOLD, or when it falls strictly inside another sample's circle
     (an invisible region, so it cannot be a boundary point).
     """
+    global LAST_NORM
+    LAST_NORM = None
     r = np.abs(sdf)
     neighbors = regular_triangulation_neighbors(xy, r)
     grads, errors, inherited, ambiguous = estimate_gradients_RANSAC(xy, sdf, neighbors, inherit)
@@ -541,6 +549,30 @@ def power_vertex_backprop(X, T, V, A, ok, gV):
     return gX
 
 
+def contour_components(X, W, labels):
+    """Number of connected components (closed loops) of the power contour."""
+    T, Vplane = regular_triangulation(X, W)
+    V, _, _ = power_vertices(X, W, T, Vplane)
+    edges = contour_edges(T, labels)
+    if not edges:
+        return 0
+    nbrs = merge_contour(V, edges)[5]
+    seen = np.zeros(len(nbrs), bool)
+    count = 0
+    for v0 in range(len(nbrs)):
+        if seen[v0]:
+            continue
+        count += 1
+        stack = [v0]
+        seen[v0] = True
+        while stack:
+            for w in nbrs[stack.pop()]:
+                if not seen[w]:
+                    seen[w] = True
+                    stack.append(w)
+    return count
+
+
 def contour_segments(X, W, labels):
     """Power-contour segments (K, 2, 2) of the sites."""
     T, Vplane = regular_triangulation(X, W)
@@ -953,6 +985,9 @@ class Problem:
                                           grad=False)
         return self.lw * L + self.tw * E
 
+    def components(self, theta):
+        return contour_components(*self.sites(theta))
+
     def length_and_turning(self, theta):
         X, W, lab = self.sites(theta)
         L, E, _ = contour_length_and_grad(X, W, lab, 0.0, 1.0, self.h, self.own, self.length_mode)
@@ -1100,7 +1135,9 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
                        rope_flat=10.0, length_mode="all"):
     """Move each projection point along the exposed arcs of its circle to
     minimize LENGTH_WEIGHT * the power-contour length + turning * its
-    turning-angle energy (scale h = turning_h * sample_spacing(xy)), both of
+    turning-angle energy (scale h = turning_h * sample_spacing(xy)), both
+    normalized at the start (length / (L0 / k), energy / (2 pi k), k the
+    contour's loops; see LAST_NORM), both of
     the rope instead with rope, or with
     turning_only the turning-angle energy alone, by projected gradient
     descent starting from proj0 (N, 2).
@@ -1136,6 +1173,18 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
     th = p.theta_ref.copy()
     L0, E0 = p.length_and_turning(th)
     R0, RE0 = p.rope_length_and_turning(th)
+    # Normalize at the start, fixed from then on: the length by the mean
+    # perimeter of the k loops (L0 / k) and the turning energy by k full turns
+    # (2 pi k), so both terms are ~1 per loop and the weights compare
+    k = max(p.components(th), 1)
+    Lref = R0 if rope else L0
+    p.lw = lw * (k / Lref if Lref > 0 else 1.0)
+    p.tw = tw / (2 * np.pi * k)
+    global LAST_NORM
+    X0, W0, lab0 = p.sites(th)
+    LAST_NORM = {"k": int(k), "L0": float(Lref), "length_weight": float(LENGTH_WEIGHT), "rope_L0": float(R0),
+                 "length_mode": length_mode, "rope": bool(rope),
+                 "contour_L0": float(contour_length_and_grad(X0, W0, lab0, grad=False)[0])}
     th, hist = optimize(p, th, iters=REFINE_ITERS)
     f_gd = hist[-1]
     th, hist_rp = rprop(p, th, iters=REFINE_ITERS)
@@ -1146,7 +1195,8 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
     R1, RE1 = p.rope_length_and_turning(th)
     print(f"  refine{' (rope)' if rope else ''}: contour length [{length_mode}] {L0:.4f} -> {L1:.4f}, turning {E0:.4f} -> {E1:.4f}; "
           f"rope length {R0:.4f} -> {R1:.4f}, turning {RE0:.4f} -> {RE1:.4f} "
-          f"(weights: length {lw:g}, turning {tw:g}, h = {turning_h:g} x spacing; {len(hist) - 1} GD iters -> {f_gd:.4f}, "
+          f"(weights: length {lw:g}, turning {tw:g}, h = {turning_h:g} x spacing; "
+          f"objective normalized by L0 / k = {Lref / k:.4f} and 2 pi k, k = {k} loops; {len(hist) - 1} GD iters -> {f_gd:.4f}, "
           f"{len(hist_rp) - 1} Rprop iters -> {hist_rp.min():.4f}, {cd_rounds} CD rounds -> {f_cd:.4f}); "
           f"{p.free.sum()} free, {p.is_corner.sum()} fixed corners, {(~p.has_q).sum()} without exposed arc")
     return q
