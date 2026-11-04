@@ -57,7 +57,13 @@
         #tip p { margin: 0 0 8px; }
         #tip p:last-child { margin-bottom: 0; }
         #tip b { color: #f5b041; }
+        /* only on the local dev server / file: (estimate_server.py experiments) */
+        html.online .dev-only { display: none !important; }
+        html:not(.online) .online-only, html.online .dev-label { display: none; }
     </style>
+    <script>
+        if (!['localhost', '127.0.0.1', ''].includes(location.hostname)) document.documentElement.classList.add('online');
+    </script>
 </head>
 <body>
     <div id="ui">
@@ -129,24 +135,24 @@
                         <input type="checkbox" id="toggleContour" style="margin: 0;"> Show power contour
                         <span id="contourLen" style="display: inline; margin-top: 0; color: #d35400;"></span>
                     </label>
-                    <label class="row" style="cursor: pointer;">
+                    <label class="row dev-only" style="cursor: pointer;">
                         <input type="checkbox" id="toggleRope" style="margin: 0;"> Show rope
                         <span id="ropeLen" style="display: inline; margin-top: 0; color: #2471a3;"></span>
                     </label>
-                    <div class="row" style="margin-left: 22px;" title="Two consecutive projection points are joined straight when their tangents turn by less than this, or one tangent points at the other within it; else through the corner where their tangent lines meet">
+                    <div class="row dev-only" style="margin-left: 22px;" title="Two consecutive projection points are joined straight when their tangents turn by less than this, or one tangent points at the other within it; else through the corner where their tangent lines meet">
                         Rope flat angle:
                         <input type="number" id="ropeFlat" value="10" min="0" max="90" step="1" style="width: 56px;"> °
                     </div>
                     <label class="row" style="cursor: pointer;">
-                        <input type="checkbox" id="toggleGT" style="margin: 0;"> GT projection points
+                        <input type="checkbox" id="toggleGT" style="margin: 0;"> <span class="dev-label">GT projection points</span><span class="online-only">Add projection points (r = 0, opposite sign)</span>
                     </label>
-                    <label class="row" style="cursor: pointer;" title="Runs estimate_projections() in assets/experiments.py (needs: python3 assets/estimate_server.py)">
+                    <label class="row dev-only" style="cursor: pointer;" title="Runs estimate_projections() in assets/experiments.py (needs: python3 assets/estimate_server.py)">
                         <input type="checkbox" id="toggleEst" style="margin: 0;"> Estimated projection points
                     </label>
-                    <label class="row" style="cursor: pointer; margin-left: 22px;" title="Samples without a usable gradient take one solved by a sample whose best neighbor pair included them">
+                    <label class="row dev-only" style="cursor: pointer; margin-left: 22px;" title="Samples without a usable gradient take one solved by a sample whose best neighbor pair included them">
                         <input type="checkbox" id="toggleInherit" checked style="margin: 0;"> Inherit gradients from neighbors
                     </label>
-                    <div class="row" style="margin-left: 22px;">
+                    <div class="row dev-only" style="margin-left: 22px;">
                         <label class="row" style="cursor: pointer; margin-top: 0;">
                             <input type="checkbox" id="toggleRefine" style="margin: 0;"> Refine
                         </label>
@@ -160,10 +166,10 @@
                         </div>
                         <span id="refineLoss" style="color: #d35400;"></span>
                     </div>
-                    <div class="row" style="margin-left: 44px; margin-top: 2px;">
+                    <div class="row dev-only" style="margin-left: 44px; margin-top: 2px;">
                         <span id="refineLossDetail" style="color: #d35400;"></span>
                     </div>
-                    <div class="row" style="margin-left: 44px;">
+                    <div class="row dev-only" style="margin-left: 44px;">
                         Length:
                         <select id="lengthMode">
                             <option value="all">all edges</option>
@@ -171,7 +177,7 @@
                             <option value="free_sq">non-tangent edges, squared</option>
                         </select>
                     </div>
-                    <div class="row" style="margin-left: 44px; flex-wrap: wrap; row-gap: 4px;">
+                    <div class="row dev-only" style="margin-left: 44px; flex-wrap: wrap; row-gap: 4px;">
                         Turning-angle weight:
                         <input type="number" id="turnWeight" value="0" min="0" step="0.01" style="width: 46px;">
                         <label class="row" style="cursor: pointer; margin-top: 0; gap: 4px;">
@@ -179,18 +185,18 @@
                         </label>
                         <span id="turnSum" style="display: inline; margin-top: 0; color: #d35400;"></span>
                     </div>
-                    <label class="row" style="cursor: pointer; margin-left: 44px;">
+                    <label class="row dev-only" style="cursor: pointer; margin-left: 44px;">
                         <input type="checkbox" id="ropeOpt" style="margin: 0;"> Use rope (length and turning)
                     </label>
-                    <div class="row" style="margin-left: 44px;">
+                    <div class="row dev-only" style="margin-left: 44px;">
                         Turning scale h:
                         <input type="number" id="turnH" value="0" min="0" step="0.05" style="width: 70px;"> × spacing
                     </div>
-                    <div class="row" style="margin-left: 44px;" title="T = Σ c·|θ|^p: p &lt; 1 makes one sharp corner cheaper than the same turn spread over several">
+                    <div class="row dev-only" style="margin-left: 44px;" title="T = Σ c·|θ|^p: p &lt; 1 makes one sharp corner cheaper than the same turn spread over several">
                         Turning power p:
                         <input type="number" id="turnP" value="0.5" min="0.05" max="1" step="0.1" style="width: 70px;">
                     </div>
-                    <span style="color: #666; font-size: 12px; margin-top: 2px;">Projection points: r = 0, opposite sign of their sample; at most one kind at a time.</span>
+                    <span class="dev-only" style="color: #666; font-size: 12px; margin-top: 2px;">Projection points: r = 0, opposite sign of their sample; at most one kind at a time.</span>
                     <div class="row">
                         Rotation variance:
                         <input type="number" id="projVar" value="0" min="0" step="0.01" style="width: 70px;"> rad²
