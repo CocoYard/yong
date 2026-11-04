@@ -154,7 +154,7 @@
                         <div class="info-text" hidden>
                             <p>Slide each projection point along its circle to minimize <b>L·k/L<sub>0</sub> + w·T/(2πk)</b> (or the T term alone with Turning only): L per mean loop perimeter and T per full turn.</p>
                             <p>With <i>Use rope</i>, L and T are the rope's instead of the contour's: the projection points joined in contour order, straight or through the corner of their tangents (see Rope flat angle), else along the contour without cutting into a circle; its T counts every vertex.</p>
-                            <p><b>L</b>: contour length; with <i>Length</i> set to non-tangent edges, without the edges between a projection point and its own circle (squared: Σ l²).<br><b>T</b> = Σ<sub>i</sub> c<sub>i</sub>·|θ<sub>i</sub>|, θ<sub>i</sub> the turning angle at contour vertex i (skipped on a projection point, except on the rope).<br>c = min(1, (l<sub>a</sub>+l<sub>b</sub>)/(2h)), l<sub>a</sub>, l<sub>b</sub> the lengths of its two edges.</p>
+                            <p><b>L</b>: contour length; with <i>Length</i> set to non-tangent edges, without the edges between a projection point and its own circle (squared: Σ l²).<br><b>T</b> = Σ<sub>i</sub> c<sub>i</sub>·|θ<sub>i</sub>|<sup>p</sup> (p = Turning power; p &lt; 1 favors few sharp corners), θ<sub>i</sub> the turning angle at contour vertex i (skipped on a projection point, except on the rope).<br>c = min(1, (l<sub>a</sub>+l<sub>b</sub>)/(2h)), l<sub>a</sub>, l<sub>b</sub> the lengths of its two edges.</p>
                             <p><b>Weight</b>: w. Right of it: T of the shown contour (or rope), and the plain Σ|θ| without h.<br><b>Turning scale h</b>: × sample spacing.</p>
                             <p><b>Loss</b> (the refine's objective, for the current points): L·k/L<sub>0</sub> + w·T/(2πk), L<sub>0</sub> and k the length and number of loops of the contour (or rope) where the refine started.</p>
                         </div>
@@ -184,7 +184,11 @@
                     </label>
                     <div class="row" style="margin-left: 44px;">
                         Turning scale h:
-                        <input type="number" id="turnH" value="0.1" min="0" step="0.05" style="width: 70px;"> × spacing
+                        <input type="number" id="turnH" value="0" min="0" step="0.05" style="width: 70px;"> × spacing
+                    </div>
+                    <div class="row" style="margin-left: 44px;" title="T = Σ c·|θ|^p: p &lt; 1 makes one sharp corner cheaper than the same turn spread over several">
+                        Turning power p:
+                        <input type="number" id="turnP" value="0.5" min="0.05" max="1" step="0.1" style="width: 70px;">
                     </div>
                     <span style="color: #666; font-size: 12px; margin-top: 2px;">Projection points: r = 0, opposite sign of their sample; at most one kind at a time.</span>
                     <div class="row">
@@ -712,6 +716,11 @@
         document.getElementById('lengthMode').addEventListener('change', () => {
             if (projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
         });
+        document.getElementById('turnP').addEventListener('change', (e) => {
+            e.target.value = turnPower();
+            if (geom) { geom.turnSum = undefined; requestRender(); }
+            if (projMode === 'est' && document.getElementById('toggleRefine').checked) runEstimate(true);
+        });
         document.getElementById('turnH').addEventListener('change', (e) => {
             let v = parseFloat(e.target.value);
             if (!(v >= 0)) v = 0;
@@ -769,6 +778,7 @@
                     rope: document.getElementById('ropeOpt').checked,
                     rope_flat: parseFloat(document.getElementById('ropeFlat').value) || 0,
                     turning_h: parseFloat(document.getElementById('turnH').value) || 0,
+                    turning_power: turnPower(),
                     length_mode: document.getElementById('lengthMode').value,
                 },
             };
@@ -1209,10 +1219,18 @@
             return { V, nbrs };
         }
 
+        // Turning power p of the input; phi(t) = (|t| + eps)^p - eps^p as
+        // turning_and_grad in experiments.py (TURN_EPS)
+        const TURN_EPS = 1e-3;
+        function turnPower() {
+            const p = parseFloat(document.getElementById('turnP').value);
+            return p > 0 ? Math.min(p, 1) : 0.5;
+        }
         function turningSum(segs, tol, h, atQ = true, graph = null) {
             const { V, nbrs } = graph ?? contourGraph(segs, tol);
 
             const qs = points.filter((p) => p.proj);
+            const p = turnPower();
             let total = 0, raw = 0;
             V.forEach((v, m) => {
                 if (nbrs[m].size !== 2) return;
@@ -1221,7 +1239,7 @@
                 const th = Math.abs(Math.atan2(e1x * e2y - e1y * e2x, e1x * e2x + e1y * e2y));
                 if (atQ && qs.some((q) => Math.hypot(q.x - v.x, q.y - v.y) < tol)) return;
                 const c = h > 0 ? Math.min(1, (Math.hypot(e1x, e1y) + Math.hypot(e2x, e2y)) / (2 * h)) : 1;
-                total += c * th;
+                total += c * ((th + TURN_EPS) ** p - TURN_EPS ** p);
                 raw += th;
             });
             return { total, raw };

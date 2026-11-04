@@ -50,7 +50,7 @@ def covered_by_other_circle(q, xy, r, tol=None):
 
 
 def estimate_projections(xy, sdf, loops, inherit=True, refine=False, turning=0.0, turning_only=False,
-                         turning_h=0.1, rope=False, rope_flat=10.0, length_mode="all"):
+                         turning_h=0.0, rope=False, rope_flat=10.0, length_mode="all", turning_power=0.5):
     """Estimated projection point for each sample.
 
     xy: (N, 2) sample positions, sdf: (N,) signed distances (negative inside),
@@ -75,6 +75,9 @@ def estimate_projections(xy, sdf, loops, inherit=True, refine=False, turning=0.0
         edge), "free" (skipping the tangent edges at projection points, i.e.
         between a projection point and its own circle) or "free_sq" (those,
         squared); see contour_length_and_grad (page select).
+    turning_power: p of the turning term, sum of c * |theta|^p (see
+        turning_and_grad; page input); 1 is the plain sum, p < 1 favors few
+        sharp corners.
     Returns (N, 2); a row of NaNs drops that sample's projection point.
 
     RANSAC-style: the gradient at each sample is fit from pairs of its regular
@@ -102,7 +105,8 @@ def estimate_projections(xy, sdf, loops, inherit=True, refine=False, turning=0.0
           f"{high_err.sum()} error > {ERROR_THRESHOLD}, "
           f"{infeasible.sum()} inside another circle")
     if refine:
-        proj = refine_projections(xy, sdf, proj, turning, turning_only, turning_h, rope, rope_flat, length_mode)
+        proj = refine_projections(xy, sdf, proj, turning, turning_only, turning_h, rope, rope_flat, length_mode,
+                                  turning_power)
     return proj
 
 
@@ -283,6 +287,7 @@ REFINE_ITERS = 400       # projected gradient descent iterations
 CD_OUTER = 50            # coordinate descent: max rounds over all points
 CD_INNER = 5             # coordinate descent: max 1D steps per point per round
 LENGTH_WEIGHT = 1.0      # weight of the contour length in the refine objective
+TURN_EPS = 1e-3          # turning term: phi(t) = (|t| + eps)^p - eps^p (see turning_and_grad)
                          # (turning_only sets it to 0)
 
 
@@ -424,7 +429,7 @@ def merge_contour(V, edges):
     return ts, c, size, Vc, pos, nbrs
 
 
-def turning_and_grad(V, edges, Qp, h=0.0):
+def turning_and_grad(V, edges, Qp, h=0.0, power=1.0):
     """Turning-angle energy of the contour polyline and its gradients dE/dV
     and dE/dQp (Qp: the projection points; always 0 here).
 
@@ -441,14 +446,19 @@ def turning_and_grad(V, edges, Qp, h=0.0):
     as a q rotates off alignment and opens a tiny step whose two ends turn
     ~90 degrees each, however short the step. So each term is scaled by
     c_i = min(1, (l_a + l_b) / (2 h)), l_a, l_b the lengths of its two edges:
-        E = sum_i c_i * |theta_i|.
+        E = sum_i c_i * phi(theta_i),  phi(t) = (|t| + eps)^p - eps^p,
+    eps = TURN_EPS; phi = |t| for p = 1. p < 1 makes one sharp corner cheaper
+    than the same turn spread over several (a closed convex curve turns by 2 pi
+    however it is split), so it favors few corners; eps keeps the gradient
+    finite at t = 0.
 
     With e1 = v - a, e2 = b - v, theta = atan2(e1 x e2, e1 . e2), and
     perp(u) = (-u_y, u_x):
         dtheta/da = perp(e1) / |e1|^2
         dtheta/db = perp(e2) / |e2|^2
         dtheta/dv = -dtheta/da - dtheta/db
-    and where c < 1, dc/dl = 1 / (2 h) for both edges.
+    with dphi/dt = p (|t| + eps)^(p - 1) sign(t), and where c < 1,
+    dc/dl = 1 / (2 h) for both edges.
     """
     ts, c, size, Vc, pos, nbrs = merge_contour(V, edges)
     k = len(Vc)
@@ -467,9 +477,11 @@ def turning_and_grad(V, edges, Qp, h=0.0):
         theta = np.arctan2(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0], (e1 * e2).sum(1))
         l1, l2 = np.linalg.norm(e1, axis=1), np.linalg.norm(e2, axis=1)
         cs = np.minimum(1.0, (l1 + l2) / (2 * h)) if h > 0 else np.ones(len(two))
-        E = float((cs * np.abs(theta)).sum())
+        at = np.abs(theta)
+        phi = (at + TURN_EPS) ** power - TURN_EPS ** power
+        E = float((cs * phi).sum())
         # through theta
-        gt = (cs * np.sign(theta))[:, None]
+        gt = (cs * power * (at + TURN_EPS) ** (power - 1) * np.sign(theta))[:, None]
         da = perp(e1) / (l1 ** 2)[:, None]
         db = perp(e2) / (l2 ** 2)[:, None]
         np.add.at(gVc, a2, gt * da)
@@ -478,7 +490,7 @@ def turning_and_grad(V, edges, Qp, h=0.0):
         # through c (only where c < 1)
         if h > 0:
             sh = cs < 1
-            g = (np.abs(theta[sh]) / (2 * h))[:, None]
+            g = (phi[sh] / (2 * h))[:, None]
             u1 = e1[sh] / l1[sh][:, None] * g
             u2 = e2[sh] / l2[sh][:, None] * g
             np.add.at(gVc, two[sh], u1 - u2)
@@ -490,7 +502,8 @@ def turning_and_grad(V, edges, Qp, h=0.0):
     return E, gV, np.zeros_like(Qp)
 
 
-def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0, own=None, length_mode="all", grad=True):
+def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0, own=None, length_mode="all", grad=True,
+                            power=1.0):
     """Contour length L, turning-angle energy E (see turning_and_grad) and the
     gradient of lw * L + tw * E w.r.t. all site positions (weights held fixed).
 
@@ -521,7 +534,7 @@ def contour_length_and_grad(X, W, labels, lw=1.0, tw=0.0, h=0.0, own=None, lengt
     qsel = np.where(W == 0)[0]                          # projection points (and the far box)
     gQ = None
     if tw and edges:
-        E, gE, gQ = turning_and_grad(V, edges, X[qsel], h)
+        E, gE, gQ = turning_and_grad(V, edges, X[qsel], h, power)
         gV += tw * gE
     if not grad:
         return L, E, None
@@ -734,7 +747,7 @@ def place_on_loops(Q, Vc, loops, tol):
     return [sorted(o) for o in on]
 
 
-def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_paths=False):
+def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_paths=False, power=1.0):
     """Length L and turning-angle energy E of the rope (see turning_and_grad,
     with every rope vertex counted: no discount at projection points) and
     their gradients: (L, E, gq_L, gth_L, gq_E, gth_E[, paths]), gq_* (len(qs), 2)
@@ -883,7 +896,7 @@ def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_pat
             gE.append(np.zeros_like(P_))
             continue
         ed = [(0, 0, i, (i + 1) % k) for i in (range(k) if closed else range(k - 1))]
-        e, g, _ = turning_and_grad(P_, ed, np.zeros((0, 2)), h)
+        e, g, _ = turning_and_grad(P_, ed, np.zeros((0, 2)), h, power)
         E += e
         gE.append(g)
     gqE, gthE = chain(gE)
@@ -911,9 +924,9 @@ class Problem:
     """
 
     def __init__(self, C, R, S, theta_ref, box=20.0, lw=1.0, tw=0.0, h=0.0, rope=False, flat_deg=10.0,
-                 length_mode="all"):
+                 length_mode="all", power=1.0):
         self.C, self.R, self.S = C, R, S
-        self.length_mode = length_mode
+        self.length_mode, self.power = length_mode, power
         self.lw, self.tw, self.h, self.rope, self.flat_deg = lw, tw, h, rope, flat_deg
         n = len(C)
         self.arcs = [free_arcs(i, C, R) if R[i] > 1e-12 else [] for i in range(n)]
@@ -961,12 +974,13 @@ class Problem:
         gth = np.zeros(n)
         f = 0.0
         if not self.rope:
-            L, E, gX = contour_length_and_grad(X, W, lab, self.lw, self.tw, self.h, self.own, self.length_mode)
+            L, E, gX = contour_length_and_grad(X, W, lab, self.lw, self.tw, self.h, self.own, self.length_mode,
+                                               power=self.power)
             gq[self.qidx] = gX[n:n + m]
             f = self.lw * L + self.tw * E
         else:
             L, E, gqL, gthL, gqE, gthE = rope_terms(X, W, lab, n, np.arange(n, n + m), self.C[self.qidx],
-                                                    self.flat_deg, self.h)
+                                                    self.flat_deg, self.h, power=self.power)
             gq[self.qidx] = self.lw * gqL + self.tw * gqE
             gth[self.qidx] = self.lw * gthL + self.tw * gthE
             f = self.lw * L + self.tw * E
@@ -982,7 +996,7 @@ class Problem:
             return self.eval(theta)[0]
         X, W, lab = self.sites(theta)
         L, E, _ = contour_length_and_grad(X, W, lab, self.lw, self.tw, self.h, self.own, self.length_mode,
-                                          grad=False)
+                                          grad=False, power=self.power)
         return self.lw * L + self.tw * E
 
     def components(self, theta):
@@ -990,13 +1004,14 @@ class Problem:
 
     def length_and_turning(self, theta):
         X, W, lab = self.sites(theta)
-        L, E, _ = contour_length_and_grad(X, W, lab, 0.0, 1.0, self.h, self.own, self.length_mode)
+        L, E, _ = contour_length_and_grad(X, W, lab, 0.0, 1.0, self.h, self.own, self.length_mode, power=self.power)
         return L, E
 
     def rope_length_and_turning(self, theta):
         X, W, lab = self.sites(theta)
         n, m = len(self.C), len(self.qidx)
-        return rope_terms(X, W, lab, n, np.arange(n, n + m), self.C[self.qidx], self.flat_deg, self.h)[:2]
+        return rope_terms(X, W, lab, n, np.arange(n, n + m), self.C[self.qidx], self.flat_deg, self.h,
+                          power=self.power)[:2]
 
     def project(self, theta):
         return np.clip(theta, self.lo, self.hi)
@@ -1131,8 +1146,8 @@ def sample_spacing(xy):
     return float(np.median(d.min(1)))
 
 
-def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_h=0.1, rope=False,
-                       rope_flat=10.0, length_mode="all"):
+def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_h=0.0, rope=False,
+                       rope_flat=10.0, length_mode="all", turning_power=0.5):
     """Move each projection point along the exposed arcs of its circle to
     minimize LENGTH_WEIGHT * the power-contour length + turning * its
     turning-angle energy (scale h = turning_h * sample_spacing(xy)), both
@@ -1169,7 +1184,7 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
     theta_ref = np.arctan2(d[:, 1], d[:, 0])          # NaN where proj0 is NaN
     lw, tw = (0.0, 1.0) if turning_only else (LENGTH_WEIGHT, turning)
     p = Problem(xy, R, S, theta_ref, lw=lw, tw=tw, h=turning_h * sample_spacing(xy), rope=rope,
-                flat_deg=rope_flat, length_mode=length_mode)
+                flat_deg=rope_flat, length_mode=length_mode, power=turning_power)
     th = p.theta_ref.copy()
     L0, E0 = p.length_and_turning(th)
     R0, RE0 = p.rope_length_and_turning(th)
@@ -1195,7 +1210,7 @@ def refine_projections(xy, sdf, proj0, turning=0.0, turning_only=False, turning_
     R1, RE1 = p.rope_length_and_turning(th)
     print(f"  refine{' (rope)' if rope else ''}: contour length [{length_mode}] {L0:.4f} -> {L1:.4f}, turning {E0:.4f} -> {E1:.4f}; "
           f"rope length {R0:.4f} -> {R1:.4f}, turning {RE0:.4f} -> {RE1:.4f} "
-          f"(weights: length {lw:g}, turning {tw:g}, h = {turning_h:g} x spacing; "
+          f"(weights: length {lw:g}, turning {tw:g}, h = {turning_h:g} x spacing, p = {turning_power:g}; "
           f"objective normalized by L0 / k = {Lref / k:.4f} and 2 pi k, k = {k} loops; {len(hist) - 1} GD iters -> {f_gd:.4f}, "
           f"{len(hist_rp) - 1} Rprop iters -> {hist_rp.min():.4f}, {cd_rounds} CD rounds -> {f_cd:.4f}); "
           f"{p.free.sum()} free, {p.is_corner.sum()} fixed corners, {(~p.has_q).sum()} without exposed arc")
