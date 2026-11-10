@@ -1312,18 +1312,6 @@
         function computeRope(segs, tol, flat, eps) {
             const { V, nbrs, sites } = contourGraph(segs, tol);
             const key = (u, w) => (u < w ? `${u},${w}` : `${w},${u}`);
-            // Prune dead-end spurs (vertices left with one neighbor), which
-            // would stop the walk around a loop
-            const stack = V.map((_, v) => v).filter((v) => nbrs[v].size === 1);
-            while (stack.length) {
-                const v = stack.pop();
-                for (const w of nbrs[v]) {
-                    nbrs[w].delete(v);
-                    sites.delete(key(v, w));
-                    if (nbrs[w].size === 1) stack.push(w);
-                }
-                nbrs[v].clear();
-            }
             const used = new Set(), loops = [];
             for (const k0 of sites.keys()) {
                 if (used.has(k0)) continue;

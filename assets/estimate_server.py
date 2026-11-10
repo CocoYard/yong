@@ -2,7 +2,7 @@
 
     python3 assets/estimate_server.py
 
-Each POST /estimate reloads experiments.py, so edits to `estimate_projections`
+Each POST /estimate reloads experiments.py (and simplify.py), so edits to `estimate_projections`
 apply on the next click. Request (y up, normalized [-1, 1]^2):
     {"shape": str, "loops": [[[x, y], ...], ...], "samples": [{"x", "y", "sdf"}, ...],
      "options": {...}}   # passed to estimate_projections as keyword arguments
@@ -14,6 +14,7 @@ normalization, for the page's normalized Length / T).
 
 import importlib.util
 import json
+import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,7 +26,9 @@ EXPERIMENTS = Path(__file__).with_name("experiments.py")
 
 
 def load_experiments():
-    """Import experiments.py fresh, picking up any edits."""
+    """Import experiments.py fresh, picking up any edits (also to the modules
+    it imports from this folder, like simplify.py)."""
+    sys.modules.pop("simplify", None)
     spec = importlib.util.spec_from_file_location("experiments", EXPERIMENTS)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

@@ -13,6 +13,8 @@ import itertools
 import numpy as np
 from scipy.spatial import ConvexHull
 
+from simplify import simplify_contour
+
 # Filters applied after estimation (normalized units)
 ERROR_THRESHOLD = 1e-8   # drop a projection whose RANSAC error exceeds this
 FEASIBILITY_TOL = 1e-8   # inside circle j means |q - x_j| < r_j - tol; slack for curved boundaries
@@ -604,165 +606,16 @@ def closest_on_segments(P, segs):
 
 
 # ----------------------------------------------------------------------------- rope
-# The rope: a simplified contour through the projection points. Walking each
-# contour loop gives the order of the q's on it, and the contour's direction
-# leaving / arriving at each q (the tangent line of its circle, or at a
-# corner the contour edges on either side). Between two consecutive q's a, b:
-#   - the straight segment ab when the tangents turn by less than the flat
-#     angle, or one tangent points at the other point (within that angle);
-#   - else the corner X where the two tangent lines meet, a -> X -> b;
-#   - if that path cuts into a circle, or the tangents meet behind a or
-#     beyond b, the shortest polyline from a to b through the contour's
-#     vertices between them that cuts into no circle (the contour itself is
-#     one, so there always is one).
-# Gradient: segments through their endpoints; contour vertices are power
-# vertices, chained back to the sites as in contour_length_and_grad; a corner
-# piece has length lam + mu (a + lam ta = b - mu tb = X) and depends on the
-# two angles only, differentiated by central differences, rotating each q
-# together with its tangent.
-
-def cuts_circle(p0, p1, C, R, eps=None):
-    """Whether the segment p0 p1 cuts into any circle (C, R) by more than eps
-    (default FEASIBILITY_TOL: slack for estimation error, as for q itself)."""
-    eps = FEASIBILITY_TOL if eps is None else eps
-    d = p1 - p0
-    L2 = d @ d
-    t = np.clip(((C - p0) @ d) / L2, 0, 1) if L2 > 1e-24 else np.zeros(len(C))
-    return bool((R - np.linalg.norm(C - (p0 + t[:, None] * d), axis=1) > eps).any())
-
-
-def tangent_corner(a, ta, b, tb):
-    """(X, lam, mu) with X = a + lam ta = b - mu tb, or None if parallel."""
-    det = ta[0] * tb[1] - ta[1] * tb[0]
-    if abs(det) < 1e-12:
-        return None
-    d = b - a
-    lam = (d[0] * tb[1] - d[1] * tb[0]) / det
-    mu = (ta[0] * d[1] - ta[1] * d[0]) / det
-    return a + lam * ta, lam, mu
-
-
-def rope_piece(a, ta, b, tb, C, R, flat, tol):
-    """("line",), ("corner", X), or None when the contour fallback is needed."""
-    d = b - a
-    l = np.hypot(*d)
-    if l < tol:
-        return ("line",)
-    # flat turn, or one tangent (nearly) pointing at the other point
-    cf = np.cos(flat)
-    if ta @ tb >= cf or ta @ d >= cf * l or tb @ d >= cf * l:
-        return None if cuts_circle(a, b, C, R) else ("line",)
-    sol = tangent_corner(a, ta, b, tb)
-    if sol is None or sol[1] < 0 or sol[2] < 0:
-        return None
-    X = sol[0]
-    return None if cuts_circle(a, X, C, R) or cuts_circle(X, b, C, R) else ("corner", X)
-
-
-def shortest_clear_path(pts, C, R):
-    """Indices of the shortest polyline pts[0] -> pts[-1] through any of the
-    points in between whose segments cut into no circle (Dijkstra);
-    consecutive points (contour edges) are always allowed."""
-    k = len(pts)
-    dist = np.full(k, np.inf)
-    dist[0] = 0.0
-    prev = np.full(k, -1)
-    done = np.zeros(k, bool)
-    while True:
-        i = int(np.argmin(np.where(done, np.inf, dist)))
-        if done[i] or not np.isfinite(dist[i]):
-            break
-        done[i] = True
-        if i == k - 1:
-            break
-        for j in range(k):
-            if done[j] or j == i:
-                continue
-            dj = dist[i] + np.hypot(*(pts[j] - pts[i]))
-            if dj < dist[j] and (abs(i - j) == 1 or not cuts_circle(pts[i], pts[j], C, R)):
-                dist[j], prev[j] = dj, i
-    path = [k - 1]
-    while path[-1] > 0:
-        path.append(prev[path[-1]])
-    return path[::-1]
-
-
-def rope_loops(Vc, nbrs):
-    """Loops of the contour graph as (closed, merged vertex ids in walking
-    order). Dead-end spurs are pruned first; a walk stuck at a junction keeps
-    the cycle it closed there."""
-    nbrs = [set(s) for s in nbrs]
-    stack = [v for v in range(len(Vc)) if len(nbrs[v]) == 1]
-    while stack:
-        v = stack.pop()
-        for w in list(nbrs[v]):
-            nbrs[w].discard(v)
-            if len(nbrs[w]) == 1:
-                stack.append(w)
-        nbrs[v].clear()
-    used, loops = set(), []
-    for u0 in range(len(Vc)):
-        for w0 in sorted(nbrs[u0]):
-            if (min(u0, w0), max(u0, w0)) in used:
-                continue
-            used.add((min(u0, w0), max(u0, w0)))
-            seq, prev, cur = [u0], u0, w0
-            while cur != u0:
-                seq.append(cur)
-                nxt = [w for w in nbrs[cur] if (min(cur, w), max(cur, w)) not in used]
-                if not nxt:
-                    break
-                w = next((w for w in nxt if w != prev), nxt[0])
-                used.add((min(cur, w), max(cur, w)))
-                prev, cur = cur, w
-            closed = cur == u0
-            if not closed and cur in seq[:-2]:
-                seq = seq[seq.index(cur):]
-                closed = True
-            loops.append((closed, seq))
-    return loops
-
-
-def place_on_loops(Q, Vc, loops, tol):
-    """For each loop, its q's (rows of Q within tol of it) as sorted
-    (parameter, q index); parameter i + t means t along edge i."""
-    best = np.full(len(Q), np.inf)
-    where = [None] * len(Q)
-    for li, (closed, seq) in enumerate(loops):
-        P = Vc[seq]
-        A = P if closed else P[:-1]
-        B = np.roll(P, -1, 0) if closed else P[1:]
-        if not len(A):
-            continue
-        e = B - A
-        t = np.clip(((Q[:, None] - A[None]) * e[None]).sum(2) / np.maximum((e * e).sum(1), 1e-300)[None], 0, 1)
-        dist = np.linalg.norm(Q[:, None] - (A[None] + t[..., None] * e[None]), axis=2)
-        j = dist.argmin(1)
-        dj = dist[np.arange(len(Q)), j]
-        for k in np.where(dj < best)[0]:
-            best[k], where[k] = dj[k], (li, j[k] + t[k, j[k]])
-    on = [[] for _ in loops]
-    for k in np.where(best < tol)[0]:
-        on[where[k][0]].append((where[k][1], k))
-    return [sorted(o) for o in on]
-
-
 def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_paths=False, power=1.0):
-    """Length L and turning-angle energy E of the rope (see turning_and_grad,
-    with every rope vertex counted: no discount at projection points) and
-    their gradients: (L, E, gq_L, gth_L, gq_E, gth_E[, paths]), gq_* (len(qs), 2)
-    w.r.t. the q positions (sites qs) and gth_* (len(qs),) w.r.t. their angles
-    around their circles' centers qc (through the corners X). The first n
-    sites are the circles. A loop through fewer than two distinct q's, or not
-    closed, keeps its contour polyline.
-
-    Each rope vertex is a q ("q", k), a contour vertex ("v", merged vertex:
-    a power vertex, chained back to the sites as in contour_length_and_grad)
-    or a corner ("x", a, ta, b, tb, ka, kb) where the tangent lines of q_ka
-    and q_kb meet; dX/dangle comes from central differences, rotating each q
-    together with its tangent."""
+    """Length L and turning-angle energy E of the rope (the simplified contour,
+    see simplify.py; turning as in turning_and_grad, with every rope vertex
+    counted: no discount at projection points) and their gradients:
+    (L, E, gq_L, gth_L, gq_E, gth_E[, paths]), gq_* (len(qs), 2) w.r.t. the q
+    positions (sites qs) and gth_* (len(qs),) w.r.t. their angles around their
+    circles' centers qc. The first n sites are the circles. Contour vertices
+    are power vertices, chained back to the sites as in
+    contour_length_and_grad."""
     C, R = X[:n], np.sqrt(np.maximum(W[:n], 0))
-    flat = np.radians(flat_deg)
     T, Vplane = regular_triangulation(X, W)
     V, A, ok = power_vertices(X, W, T, Vplane)
     edges = contour_edges(T, labels)
@@ -771,102 +624,11 @@ def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_pat
         out = (0.0, 0.0, zq, zt, zq.copy(), zt.copy())
         return out + ([],) if with_paths else out
     ts, c, size, Vc, _, nbrs = merge_contour(V, edges)
-    loops = rope_loops(Vc, nbrs)
-    Q = X[qs]
+    rope = simplify_contour(Vc, nbrs, X[qs], qc, C, R, flat_deg, tol, FEASIBILITY_TOL)
 
-    # ---- the rope as closed / open node lists
-    rope = []                                           # (closed, nodes)
-    for (closed, seq), on in zip(loops, place_on_loops(Q, Vc, loops, tol)):
-        nP = len(seq)
-        if nP < 2:
-            continue
-        distinct = len({tuple(np.round(Q[k] / tol)) for _, k in on})
-        if not closed or distinct < 2:
-            rope.append((closed, [("v", v) for v in seq]))
-            continue
-        P = Vc[seq]
-        Ed = np.roll(P, -1, 0) - P
-        El = np.linalg.norm(Ed, axis=1)
-
-        def edge_dir(i, step):
-            for s in range(nP):
-                j = (i + step * s) % nP
-                if El[j] > tol:
-                    return Ed[j] / El[j]
-            return Ed[i % nP] / max(El[i % nP], 1e-300)
-
-        def dirs(p, k):
-            """Contour directions arriving at / leaving q."""
-            i = int(np.floor(p)) % nP
-            if np.hypot(*(Q[k] - P[(i + 1) % nP])) < tol:      # at vertex i + 1
-                return edge_dir(i, -1), edge_dir(i + 1, 1)
-            if np.hypot(*(Q[k] - P[i])) < tol:                 # at vertex i
-                return edge_dir(i - 1, -1), edge_dir(i, 1)
-            d = Ed[i] / max(El[i], 1e-300)
-            return d, d
-
-        nodes = []
-        for j, (pa, ka) in enumerate(on):
-            pb, kb = on[(j + 1) % len(on)]
-            a, b = Q[ka], Q[kb]
-            ta, tb = dirs(pa, ka)[1], dirs(pb, kb)[0]
-            nodes.append(("q", ka))
-            piece = rope_piece(a, ta, b, tb, C, R, flat, tol)
-            if piece is not None and piece[0] == "corner":
-                nodes.append(("x", a, ta, b, tb, ka, kb))
-            elif piece is None:
-                ia, ib = int(np.floor(pa)) % nP, int(np.floor(pb)) % nP
-                if ib < ia or (ib == ia and pb < pa):
-                    ib += nP
-                mid = [seq[i % nP] for i in range(ia + 1, ib + 1)]
-                pts = np.array([a] + [Vc[v] for v in mid] + [b])
-                keep = shortest_clear_path(pts, C, R)
-                nodes += [("v", mid[i - 1]) for i in keep[1:-1]]
-        rope.append((True, nodes))
-
-    # ---- node positions, and d position / d angle for the corners
-    def rot(p, ctr, hh):
-        cs, sn = np.cos(hh), np.sin(hh)
-        d = p - ctr
-        return ctr + np.array([cs * d[0] - sn * d[1], sn * d[0] + cs * d[1]])
-
-    def corner(a, ta, b, tb):
-        sol = tangent_corner(a, ta, b, tb)
-        return sol[0] if sol is not None else (a + b) / 2
-
-    pos, jac = [], []
-    for closed, nodes in rope:
-        P_, J_ = [], []
-        for nd in nodes:
-            if nd[0] == "q":
-                P_.append(Q[nd[1]]); J_.append(None)
-            elif nd[0] == "v":
-                P_.append(Vc[nd[1]]); J_.append(None)
-            else:
-                _, a, ta, b, tb, ka, kb = nd
-                P_.append(corner(a, ta, b, tb))
-                hh, z = 1e-7, np.zeros(2)
-                dA = (corner(rot(a, qc[ka], hh), rot(ta, z, hh), b, tb) -
-                      corner(rot(a, qc[ka], -hh), rot(ta, z, -hh), b, tb)) / (2 * hh)
-                dB = (corner(a, ta, rot(b, qc[kb], hh), rot(tb, z, hh)) -
-                      corner(a, ta, rot(b, qc[kb], -hh), rot(tb, z, -hh))) / (2 * hh)
-                J_.append((ka, dA, kb, dB))
-        pos.append(np.array(P_).reshape(-1, 2))
-        jac.append(J_)
-
-    def chain(gpos):
-        """Gradient w.r.t. node positions -> (gq, gth)."""
-        gq, gth, gVc = np.zeros((len(qs), 2)), np.zeros(len(qs)), np.zeros_like(Vc)
-        for (closed, nodes), J_, G in zip(rope, jac, gpos):
-            for nd, J, g in zip(nodes, J_, G):
-                if nd[0] == "q":
-                    gq[nd[1]] += g
-                elif nd[0] == "v":
-                    gVc[nd[1]] += g
-                else:
-                    ka, dA, kb, dB = J
-                    gth[ka] += g @ dA
-                    gth[kb] += g @ dB
+    def chain(grads):
+        """Gradient w.r.t. the rope vertices -> (gq, gth)."""
+        gq, gth, gVc = rope.backprop(grads)
         gV = np.zeros_like(V)
         gV[ts] = gVc[c] / size[c][:, None]
         gq += power_vertex_backprop(X, T, V, A, ok, gV)[qs]
@@ -874,7 +636,7 @@ def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_pat
 
     # ---- length
     L, gL = 0.0, []
-    for (closed, nodes), P_ in zip(rope, pos):
+    for closed, P_ in zip(rope.closed, rope.points):
         G = np.zeros_like(P_)
         idx = range(len(P_)) if closed else range(len(P_) - 1)
         for i in idx:
@@ -890,7 +652,7 @@ def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_pat
 
     # ---- turning, on all rope vertices (merged when closer than 1e-6)
     E, gE = 0.0, []
-    for (closed, nodes), P_ in zip(rope, pos):
+    for closed, P_ in zip(rope.closed, rope.points):
         k = len(P_)
         if k < 3:
             gE.append(np.zeros_like(P_))
@@ -902,15 +664,7 @@ def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_pat
     gqE, gthE = chain(gE)
 
     out = (L, E, gqL, gthL, gqE, gthE)
-    if with_paths:
-        out += ([np.vstack([P_, P_[:1]]) if closed else P_ for (closed, _), P_ in zip(rope, pos)],)
-    return out
-
-
-def rope_length_and_grad(X, W, labels, n, qs, qc, flat_deg=10.0, tol=1e-6, with_paths=False):
-    """Rope length and its gradient (gq, gth); see rope_terms."""
-    out = rope_terms(X, W, labels, n, qs, qc, flat_deg, tol=tol, with_paths=with_paths)
-    return (out[0], out[2], out[3]) + ((out[6],) if with_paths else ())
+    return out + (rope.paths(),) if with_paths else out
 
 
 # ----------------------------------------------------------------------------- problem
