@@ -106,23 +106,37 @@ def simplify_loop(Vc, seq, on, Q, C, R, flat, tol, eps):
     P = Vc[seq]
     Ed = np.roll(P, -1, 0) - P
     El = np.linalg.norm(Ed, axis=1)
+    U = Ed / np.maximum(El, 1e-300)[:, None]
+    # the first edge longer than tol from each edge on, forward / backward (-1: none)
+    fwd, bwd = np.full(nP, -1), np.full(nP, -1)
+    j = -1
+    for i in range(2 * nP - 1, -1, -1):
+        if El[i % nP] > tol:
+            j = i % nP
+        if i < nP:
+            fwd[i] = j
+    j = -1
+    for i in range(2 * nP):
+        if El[i % nP] > tol:
+            j = i % nP
+        if i >= nP:
+            bwd[i - nP] = j
+    Pl, Ql = P.tolist(), Q.tolist()
 
     def edge_dir(i, step):
-        for s in range(nP):
-            j = (i + step * s) % nP
-            if El[j] > tol:
-                return Ed[j] / El[j]
-        return Ed[i % nP] / max(El[i % nP], 1e-300)
+        i %= nP
+        j = (fwd if step > 0 else bwd)[i]
+        return U[j if j >= 0 else i]
 
     def dirs(p, k):
         """Contour directions arriving at / leaving q."""
         i = int(np.floor(p)) % nP
-        if np.hypot(*(Q[k] - P[(i + 1) % nP])) < tol:      # at vertex i + 1
+        (qx, qy), (ax, ay), (bx, by) = Ql[k], Pl[i], Pl[(i + 1) % nP]
+        if np.hypot(qx - bx, qy - by) < tol:               # at vertex i + 1
             return edge_dir(i, -1), edge_dir(i + 1, 1)
-        if np.hypot(*(Q[k] - P[i])) < tol:                 # at vertex i
+        if np.hypot(qx - ax, qy - ay) < tol:               # at vertex i
             return edge_dir(i - 1, -1), edge_dir(i, 1)
-        d = Ed[i] / max(El[i], 1e-300)
-        return d, d
+        return U[i], U[i]
 
     nodes = []
     for j, (pa, ka) in enumerate(on):
@@ -245,8 +259,10 @@ def cuts_circle(p0, p1, C, R, eps):
     """Whether the segment p0 p1 cuts into any circle (C, R) by more than eps."""
     d = p1 - p0
     L2 = d @ d
-    t = np.clip(((C - p0) @ d) / L2, 0, 1) if L2 > 1e-24 else np.zeros(len(C))
-    return bool((R - np.linalg.norm(C - (p0 + t[:, None] * d), axis=1) > eps).any())
+    A = C - p0
+    if L2 > 1e-24:
+        A = A - np.clip((A @ d) / L2, 0, 1)[:, None] * d
+    return bool(((A * A).sum(1) < (R - eps) ** 2)[R > eps].any())
 
 
 def tangent_corner(a, ta, b, tb):
