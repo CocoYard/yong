@@ -849,7 +849,10 @@ def coord_descent(prob, theta0, outer=CD_OUTER, inner=CD_INNER, t0=1e-2, tmin=1e
     as it does a joint step. Only the start needs a gradient: after that each
     point first retries the direction that last worked for it, and the trials
     evaluate f alone (prob.value). Every trial rebuilds the power diagram.
-    Stops after `outer` rounds or a round that gains < tol.
+    After the first round only the points that moved in the last round and
+    their circles' regular-triangulation neighbors take part (the rest of
+    the contour did not change around them); a woken neighbor restarts from
+    step t0. Stops after `outer` rounds or a round that gains < tol.
     Returns (theta, f, rounds).
 
     TODO: move a point by deleting and reinserting it in the regular
@@ -867,9 +870,12 @@ def coord_descent(prob, theta0, outer=CD_OUTER, inner=CD_INNER, t0=1e-2, tmin=1e
     pref = -np.sign(g)
     pref[pref == 0] = 1.0
     t = np.full_like(th, t0)
+    nbrs = regular_triangulation_neighbors(prob.C, prob.R)
+    active = prob.free.copy()
     for r in range(outer):
         f_round = f
-        for i in np.where(prob.free)[0]:
+        moved_any = np.zeros(len(th), bool)
+        for i in np.where(active)[0]:
             for _ in range(inner):
                 moved = False
                 for dd in (pref[i], -pref[i]):
@@ -882,6 +888,7 @@ def coord_descent(prob, theta0, outer=CD_OUTER, inner=CD_INNER, t0=1e-2, tmin=1e
                         th, f, moved, pref[i] = trial, f2, True, dd
                         break
                 if moved:
+                    moved_any[i] = True
                     t[i] = min(2 * t[i], 0.5)
                 else:
                     t[i] = max(0.5 * t[i], tmin)
@@ -889,6 +896,12 @@ def coord_descent(prob, theta0, outer=CD_OUTER, inner=CD_INNER, t0=1e-2, tmin=1e
                         break
         if f_round - f < tol:
             break
+        active = moved_any.copy()
+        for i in np.where(moved_any)[0]:
+            active[nbrs[i]] = True
+        active &= prob.free
+        wake = active & ~moved_any
+        t[wake] = np.maximum(t[wake], t0)
     return th, f, r + 1
 
 
