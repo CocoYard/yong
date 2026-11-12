@@ -22,10 +22,14 @@ A loop through fewer than two distinct q's, or not closed, keeps its contour
 polyline.
 """
 
+import itertools
+import math
+
 import numpy as np
+from scipy.spatial import cKDTree
 
 
-def simplify_contour(Vc, nbrs, Q, qc, C, R, flat_deg=10.0, tol=1e-6, eps=1e-3):
+def simplify_contour(Vc, nbrs, Q, qc, C, R, flat_deg=10.0, tol=1e-6, eps=1e-3, cache=None):
     """The rope of a power contour.
 
     Vc (K, 2), nbrs: the contour as a graph (merged power vertices and their
@@ -35,6 +39,11 @@ def simplify_contour(Vc, nbrs, Q, qc, C, R, flat_deg=10.0, tol=1e-6, eps=1e-3):
         than eps).
     flat_deg: below this turn (degrees) two q's are joined straight.
     tol: distance under which a q counts as on the contour / on a vertex.
+    cache: optional dict reused across calls with the same C, R, flat_deg,
+        tol, eps: the piece between two consecutive q's depends only on its
+        inputs (the two q's and tangents, or the contour points between
+        them), so when one q moves (coordinate descent) every other piece is
+        a hit and only the two next to it are recomputed.
     """
     flat = np.radians(flat_deg)
     loops = contour_loops(Vc, nbrs)
@@ -42,11 +51,11 @@ def simplify_contour(Vc, nbrs, Q, qc, C, R, flat_deg=10.0, tol=1e-6, eps=1e-3):
     for (closed, seq), on in zip(loops, place_on_loops(Q, Vc, loops, tol)):
         if len(seq) < 2:
             continue
-        distinct = len({tuple(np.round(Q[k] / tol)) for _, k in on})
+        distinct = len(set(map(tuple, np.round(Q[[k for _, k in on]] / tol).reshape(-1, 2).tolist())))
         if not closed or distinct < 2:
             rope.add(closed, [("v", v) for v in seq])
         else:
-            rope.add(True, simplify_loop(Vc, seq, on, Q, C, R, flat, tol, eps))
+            rope.add(True, simplify_loop(Vc, seq, on, Q, C, R, flat, tol, eps, cache))
     return rope
 
 
@@ -99,7 +108,7 @@ class Rope:
 
 
 # ----------------------------------------------------------------------------- one loop
-def simplify_loop(Vc, seq, on, Q, C, R, flat, tol, eps):
+def simplify_loop(Vc, seq, on, Q, C, R, flat, tol, eps, cache=None):
     """Rope nodes of a closed loop (merged vertex ids seq) through its q's on
     = [(parameter, q index), ...] (see place_on_loops)."""
     nP = len(seq)
@@ -107,34 +116,26 @@ def simplify_loop(Vc, seq, on, Q, C, R, flat, tol, eps):
     Ed = np.roll(P, -1, 0) - P
     El = np.linalg.norm(Ed, axis=1)
     U = Ed / np.maximum(El, 1e-300)[:, None]
-    # the first edge longer than tol from each edge on, forward / backward (-1: none)
-    fwd, bwd = np.full(nP, -1), np.full(nP, -1)
-    j = -1
-    for i in range(2 * nP - 1, -1, -1):
-        if El[i % nP] > tol:
-            j = i % nP
-        if i < nP:
-            fwd[i] = j
-    j = -1
-    for i in range(2 * nP):
-        if El[i % nP] > tol:
-            j = i % nP
-        if i >= nP:
-            bwd[i - nP] = j
+    long_ = (El > tol).tolist()
     Pl, Ql = P.tolist(), Q.tolist()
 
     def edge_dir(i, step):
+        """Direction of the first edge longer than tol from edge i on, forward
+        / backward (edge i itself if none)."""
         i %= nP
-        j = (fwd if step > 0 else bwd)[i]
-        return U[j if j >= 0 else i]
+        for s in range(nP):
+            j = (i + s * step) % nP
+            if long_[j]:
+                return U[j]
+        return U[i]
 
     def dirs(p, k):
         """Contour directions arriving at / leaving q."""
-        i = int(np.floor(p)) % nP
+        i = math.floor(p) % nP
         (qx, qy), (ax, ay), (bx, by) = Ql[k], Pl[i], Pl[(i + 1) % nP]
-        if np.hypot(qx - bx, qy - by) < tol:               # at vertex i + 1
+        if math.hypot(qx - bx, qy - by) < tol:             # at vertex i + 1
             return edge_dir(i, -1), edge_dir(i + 1, 1)
-        if np.hypot(qx - ax, qy - ay) < tol:               # at vertex i
+        if math.hypot(qx - ax, qy - ay) < tol:             # at vertex i
             return edge_dir(i - 1, -1), edge_dir(i, 1)
         return U[i], U[i]
 
@@ -144,7 +145,13 @@ def simplify_loop(Vc, seq, on, Q, C, R, flat, tol, eps):
         a, b = Q[ka], Q[kb]
         ta, tb = dirs(pa, ka)[1], dirs(pb, kb)[0]
         nodes.append(("q", ka))
-        piece = rope_piece(a, ta, b, tb, C, R, flat, tol, eps)
+        if cache is None:
+            piece = rope_piece(a, ta, b, tb, C, R, flat, tol, eps)
+        else:
+            key = ("piece", a.tobytes(), ta.tobytes(), b.tobytes(), tb.tobytes())
+            piece = cache.get(key, key)
+            if piece is key:
+                piece = cache[key] = rope_piece(a, ta, b, tb, C, R, flat, tol, eps)
         if piece is not None and piece[0] == "corner":
             nodes.append(("x", a, ta, b, tb, ka, kb))
         elif piece is None:
@@ -153,7 +160,13 @@ def simplify_loop(Vc, seq, on, Q, C, R, flat, tol, eps):
                 ib += nP
             mid = [seq[i % nP] for i in range(ia + 1, ib + 1)]
             pts = np.array([a] + [Vc[v] for v in mid] + [b])
-            keep = shortest_clear_path(pts, C, R, eps)
+            if cache is None:
+                keep = shortest_clear_path(pts, C, R, eps)
+            else:
+                key = ("path", pts.tobytes())
+                keep = cache.get(key)
+                if keep is None:
+                    keep = cache[key] = shortest_clear_path(pts, C, R, eps)
             nodes += [("v", mid[i - 1]) for i in keep[1:-1]]
     return nodes
 
@@ -232,25 +245,42 @@ def contour_loops(Vc, nbrs):
 
 def place_on_loops(Q, Vc, loops, tol):
     """For each loop, its q's (rows of Q within tol of it) as sorted
-    (parameter, q index); parameter i + t means t along edge i."""
-    best = np.full(len(Q), np.inf)
-    where = [None] * len(Q)
+    (parameter, q index); parameter i + t means t along edge i. A q near
+    several edges takes the nearest (ties: the first loop, then the first
+    edge). Only q's within half an edge's length + tol of its midpoint are
+    measured (KD-tree), not every q against every edge."""
+    A_, B_, li_, j_ = [], [], [], []
     for li, (closed, seq) in enumerate(loops):
         P = Vc[seq]
         A = P if closed else P[:-1]
-        B = np.roll(P, -1, 0) if closed else P[1:]
         if not len(A):
             continue
-        e = B - A
-        t = np.clip(((Q[:, None] - A[None]) * e[None]).sum(2) / np.maximum((e * e).sum(1), 1e-300)[None], 0, 1)
-        dist = np.linalg.norm(Q[:, None] - (A[None] + t[..., None] * e[None]), axis=2)
-        j = dist.argmin(1)
-        dj = dist[np.arange(len(Q)), j]
-        for k in np.where(dj < best)[0]:
-            best[k], where[k] = dj[k], (li, j[k] + t[k, j[k]])
+        A_.append(A)
+        B_.append(np.roll(P, -1, 0) if closed else P[1:])
+        li_.append(np.full(len(A), li))
+        j_.append(np.arange(len(A)))
     on = [[] for _ in loops]
-    for k in np.where(best < tol)[0]:
-        on[where[k][0]].append((where[k][1], k))
+    if not A_ or not len(Q):
+        return on
+    A, B, li, j = np.vstack(A_), np.vstack(B_), np.concatenate(li_), np.concatenate(j_)
+    e = B - A
+    r = (0.5 * np.hypot(e[:, 0], e[:, 1]) + tol) * (1 + 1e-9) + 1e-12
+    hits = cKDTree(Q).query_ball_point((A + B) / 2, r)
+    cnt = np.fromiter(map(len, hits), int, len(hits))
+    if not cnt.sum():
+        return on
+    s_ = np.repeat(np.arange(len(A)), cnt)
+    k_ = np.fromiter(itertools.chain.from_iterable(hits), int, cnt.sum())
+    es = e[s_]
+    t = np.clip(((Q[k_] - A[s_]) * es).sum(1) / np.maximum((es * es).sum(1), 1e-300), 0, 1)
+    dist = np.linalg.norm(Q[k_] - (A[s_] + t[:, None] * es), axis=1)
+    near = dist < tol
+    s_, k_, t, dist = s_[near], k_[near], t[near], dist[near]
+    order = np.lexsort((j[s_], li[s_], dist, k_))      # per q: nearest, then first loop, first edge
+    first = np.ones(len(order), bool)
+    first[1:] = k_[order][1:] != k_[order][:-1]
+    for o in order[first]:
+        on[li[s_[o]]].append((j[s_[o]] + t[o], int(k_[o])))
     return [sorted(o) for o in on]
 
 

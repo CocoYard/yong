@@ -31,6 +31,7 @@ def load_experiments():
     sys.modules.pop("simplify", None)
     spec = importlib.util.spec_from_file_location("experiments", EXPERIMENTS)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules["experiments"] = mod     # so its functions pickle (coordinate descent's worker processes)
     spec.loader.exec_module(mod)
     return mod
 

@@ -9,6 +9,10 @@ rbf-your-sdf-demo).
 """
 
 import itertools
+import multiprocessing
+import os
+import pickle
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 from scipy.spatial import ConvexHull
@@ -288,6 +292,11 @@ TWO_PI = 2 * np.pi
 REFINE_ITERS = 400       # projected gradient descent iterations
 CD_OUTER = 50            # coordinate descent: max rounds over all points
 CD_INNER = 5             # coordinate descent: max 1D steps per point per round
+CD_FAIL_MAX = 5          # coordinate descent: failed 1D steps (each halving the step) before moving on
+CD_REL_TOL = 1e-4        # coordinate descent: stop once a round gains < this * |f|
+CD_WORKERS = min(os.cpu_count() or 1, 16)   # coordinate descent: processes (1: sequential)
+CD_PAR_MIN = 120         # coordinate descent: fewer free points than this run sequentially
+CD_HOPS = 3              # coordinate descent: points this many triangulation hops apart move together
 LENGTH_WEIGHT = 1.0      # weight of the contour length in the refine objective
 TURN_EPS = 1e-3          # turning term: phi(t) = (|t| + eps)^p - eps^p (see turning_and_grad)
                          # (turning_only sets it to 0)
@@ -383,16 +392,25 @@ def power_vertices(X, W, T, Vplane):
 
 
 def contour_edges(T, labels):
-    emap = {}
-    for t, tri in enumerate(T):
-        for a, b in ((tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])):
-            key = (min(a, b), max(a, b))
-            emap.setdefault(key, []).append(t)
-    out = []
-    for (a, b), ts in emap.items():
-        if labels[a] != labels[b] and len(ts) == 2:
-            out.append((a, b, ts[0], ts[1]))
-    return out
+    """Triangulation edges (a, b) between opposite labels shared by exactly two
+    triangles t1 < t2, as [(a, b, t1, t2)] in order of first appearance."""
+    T = np.asarray(T)
+    E = np.stack([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]], 1).reshape(-1, 2)
+    E.sort(1)
+    tri = np.repeat(np.arange(len(T)), 3)
+    key = E[:, 0].astype(np.int64) * (int(E.max()) + 1) + E[:, 1]     # same order as the rows (a, b)
+    _, first, inv, cnt = np.unique(key, return_index=True, return_inverse=True, return_counts=True)
+    keep = (cnt == 2) & (labels[E[first, 0]] != labels[E[first, 1]])
+    if not keep.any():
+        return []
+    # the two triangles of each kept edge, in order of appearance
+    occ = np.argsort(inv, kind="stable")
+    start = np.concatenate([[0], np.cumsum(cnt)[:-1]])
+    u = np.where(keep)[0]
+    u = u[np.argsort(first[u])]
+    t1, t2 = tri[occ[start[u]]], tri[occ[start[u] + 1]]
+    a, b = E[first[u], 0], E[first[u], 1]
+    return list(zip(a.tolist(), b.tolist(), t1.tolist(), t2.tolist()))
 
 
 def merge_contour(V, edges):
@@ -401,7 +419,8 @@ def merge_contour(V, edges):
     their mean. Returns ts (the triangles on the contour), c (merged vertex of
     each), size (triangles per merged vertex), Vc (merged positions), pos
     (triangle -> merged vertex) and nbrs (neighbor sets of merged vertices)."""
-    ts = sorted({t for _, _, t1, t2 in edges for t in (t1, t2)})
+    Ea = np.array(edges, int).reshape(-1, 4)
+    ts = np.unique(Ea[:, 2:]).tolist()
     parent = {t: t for t in ts}
 
     def find(t):
@@ -410,12 +429,13 @@ def merge_contour(V, edges):
             t = parent[t]
         return t
 
-    for _, _, t1, t2 in edges:
-        if np.hypot(*(V[t1] - V[t2])) < 1e-6:
-            parent[find(t1)] = find(t2)
-    roots = sorted({find(t) for t in ts})
+    short = np.hypot(*(V[Ea[:, 2]] - V[Ea[:, 3]]).T) < 1e-6
+    for t1, t2 in Ea[short, 2:].tolist():
+        parent[find(t1)] = find(t2)
+    root = [find(t) for t in ts]
+    roots = sorted(set(root))
     cid = {r: k for k, r in enumerate(roots)}
-    c = np.array([cid[find(t)] for t in ts], int)     # cluster of each vertex in ts
+    c = np.array([cid[r] for r in root], int)         # cluster of each vertex in ts
     k = len(roots)
     size = np.bincount(c, minlength=k).astype(float)
     Vc = np.zeros((k, 2))
@@ -606,7 +626,8 @@ def closest_on_segments(P, segs):
 
 
 # ----------------------------------------------------------------------------- rope
-def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_paths=False, power=1.0):
+def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_paths=False, power=1.0, cache=None,
+               grad=True):
     """Length L and turning-angle energy E of the rope (the simplified contour,
     see simplify.py; turning as in turning_and_grad, with every rope vertex
     counted: no discount at projection points) and their gradients:
@@ -614,7 +635,7 @@ def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_pat
     positions (sites qs) and gth_* (len(qs),) w.r.t. their angles around their
     circles' centers qc. The first n sites are the circles. Contour vertices
     are power vertices, chained back to the sites as in
-    contour_length_and_grad."""
+    contour_length_and_grad. grad=False returns just (L, E)."""
     C, R = X[:n], np.sqrt(np.maximum(W[:n], 0))
     T, Vplane = regular_triangulation(X, W)
     V, A, ok = power_vertices(X, W, T, Vplane)
@@ -624,7 +645,7 @@ def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_pat
         out = (0.0, 0.0, zq, zt, zq.copy(), zt.copy())
         return out + ([],) if with_paths else out
     ts, c, size, Vc, _, nbrs = merge_contour(V, edges)
-    rope = simplify_contour(Vc, nbrs, X[qs], qc, C, R, flat_deg, tol, FEASIBILITY_TOL)
+    rope = simplify_contour(Vc, nbrs, X[qs], qc, C, R, flat_deg, tol, FEASIBILITY_TOL, cache)
 
     def chain(grads):
         """Gradient w.r.t. the rope vertices -> (gq, gth)."""
@@ -637,18 +658,18 @@ def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_pat
     # ---- length
     L, gL = 0.0, []
     for closed, P_ in zip(rope.closed, rope.points):
-        G = np.zeros_like(P_)
-        idx = range(len(P_)) if closed else range(len(P_) - 1)
-        for i in idx:
-            j = (i + 1) % len(P_)
-            d = P_[j] - P_[i]
-            l = np.hypot(*d)
-            L += l
-            if l > 1e-14:
-                G[j] += d / l
-                G[i] -= d / l
-        gL.append(G)
-    gqL, gthL = chain(gL)
+        i = np.arange(len(P_) if closed else len(P_) - 1)
+        j = (i + 1) % max(len(P_), 1)
+        d = P_[j] - P_[i]
+        l = np.hypot(d[:, 0], d[:, 1])
+        L = sum(l.tolist(), L)
+        if grad:
+            G = np.zeros_like(P_)
+            m = l > 1e-14
+            u = d[m] / l[m][:, None]
+            np.add.at(G, j[m], u)
+            np.add.at(G, i[m], -u)
+            gL.append(G)
 
     # ---- turning, on all rope vertices (merged when closer than 1e-6)
     E, gE = 0.0, []
@@ -661,6 +682,9 @@ def rope_terms(X, W, labels, n, qs, qc, flat_deg=10.0, h=0.0, tol=1e-6, with_pat
         e, g, _ = turning_and_grad(P_, ed, np.zeros((0, 2)), h, power)
         E += e
         gE.append(g)
+    if not grad:
+        return L, E
+    gqL, gthL = chain(gL)
     gqE, gthE = chain(gE)
 
     out = (L, E, gqL, gthL, gqE, gthE)
@@ -681,6 +705,7 @@ class Problem:
                  length_mode="all", power=1.0):
         self.C, self.R, self.S = C, R, S
         self.length_mode, self.power = length_mode, power
+        self._rope_cache = {}
         self.lw, self.tw, self.h, self.rope, self.flat_deg = lw, tw, h, rope, flat_deg
         n = len(C)
         self.arcs = [free_arcs(i, C, R) if R[i] > 1e-12 else [] for i in range(n)]
@@ -734,7 +759,8 @@ class Problem:
             f = self.lw * L + self.tw * E
         else:
             L, E, gqL, gthL, gqE, gthE = rope_terms(X, W, lab, n, np.arange(n, n + m), self.C[self.qidx],
-                                                    self.flat_deg, self.h, power=self.power)
+                                                    self.flat_deg, self.h, power=self.power,
+                                                    cache=self.rope_cache())
             gq[self.qidx] = self.lw * gqL + self.tw * gqE
             gth[self.qidx] = self.lw * gthL + self.tw * gthE
             f = self.lw * L + self.tw * E
@@ -744,11 +770,13 @@ class Problem:
         return f, gth
 
     def value(self, theta):
-        """Objective of eval without its gradient (the contour's skips the
-        backprop; the rope still computes everything)."""
-        if self.rope:
-            return self.eval(theta)[0]
+        """Objective of eval without its gradient (skips the backprop)."""
         X, W, lab = self.sites(theta)
+        if self.rope:
+            n, m = len(self.C), len(self.qidx)
+            L, E = rope_terms(X, W, lab, n, np.arange(n, n + m), self.C[self.qidx], self.flat_deg, self.h,
+                              power=self.power, cache=self.rope_cache(), grad=False)
+            return self.lw * L + self.tw * E
         L, E, _ = contour_length_and_grad(X, W, lab, self.lw, self.tw, self.h, self.own, self.length_mode,
                                           grad=False, power=self.power)
         return self.lw * L + self.tw * E
@@ -765,7 +793,17 @@ class Problem:
         X, W, lab = self.sites(theta)
         n, m = len(self.C), len(self.qidx)
         return rope_terms(X, W, lab, n, np.arange(n, n + m), self.C[self.qidx], self.flat_deg, self.h,
-                          power=self.power)[:2]
+                          power=self.power, cache=self.rope_cache())[:2]
+
+    def __getstate__(self):
+        return dict(self.__dict__, _rope_cache={})
+
+    def rope_cache(self):
+        """Rope pieces of earlier evaluations (see simplify_contour), dropped
+        when it grows past 200k entries."""
+        if len(self._rope_cache) > 200_000:
+            self._rope_cache.clear()
+        return self._rope_cache
 
     def project(self, theta):
         return np.clip(theta, self.lo, self.hi)
@@ -852,7 +890,12 @@ def coord_descent(prob, theta0, outer=CD_OUTER, inner=CD_INNER, t0=1e-2, tmin=1e
     After the first round only the points that moved in the last round and
     their circles' regular-triangulation neighbors take part (the rest of
     the contour did not change around them); a woken neighbor restarts from
-    step t0. Stops after `outer` rounds or a round that gains < tol.
+    step t0. A point gives up for the round after CD_FAIL_MAX failed steps.
+    With at least CD_PAR_MIN free points, a round instead goes through
+    groups of points more than CD_HOPS triangulation hops apart, whose 1D
+    searches run in parallel (CD_WORKERS processes) from the same theta and
+    are then applied together (see _cd_batch). Stops after `outer` rounds or a round that gains < max(tol, CD_REL_TOL
+    * |f|).
     Returns (theta, f, rounds).
 
     TODO: move a point by deleting and reinserting it in the regular
@@ -872,37 +915,132 @@ def coord_descent(prob, theta0, outer=CD_OUTER, inner=CD_INNER, t0=1e-2, tmin=1e
     t = np.full_like(th, t0)
     nbrs = regular_triangulation_neighbors(prob.C, prob.R)
     active = prob.free.copy()
-    for r in range(outer):
-        f_round = f
-        moved_any = np.zeros(len(th), bool)
-        for i in np.where(active)[0]:
-            for _ in range(inner):
-                moved = False
-                for dd in (pref[i], -pref[i]):
-                    trial = th.copy()
-                    trial[i] = np.clip(th[i] + dd * t[i], lo[i], max(lo[i], hi[i]))
-                    if trial[i] == th[i]:
-                        continue
-                    f2 = prob.value(trial)
-                    if f2 < f - tol:
-                        th, f, moved, pref[i] = trial, f2, True, dd
-                        break
-                if moved:
-                    moved_any[i] = True
-                    t[i] = min(2 * t[i], 0.5)
-                else:
-                    t[i] = max(0.5 * t[i], tmin)
-                    if t[i] == tmin:
-                        break
-        if f_round - f < tol:
-            break
-        active = moved_any.copy()
-        for i in np.where(moved_any)[0]:
-            active[nbrs[i]] = True
-        active &= prob.free
-        wake = active & ~moved_any
-        t[wake] = np.maximum(t[wake], t0)
+    pool = None
+    if CD_WORKERS > 1 and prob.free.sum() >= CD_PAR_MIN:
+        pool = ProcessPoolExecutor(CD_WORKERS, multiprocessing.get_context("spawn"),
+                                   initializer=_cd_worker_init, initargs=(pickle.dumps(prob),))
+    try:
+        for r in range(outer):
+            f_round = f
+            moved_any = np.zeros(len(th), bool)
+            if pool is None:
+                for i in np.where(active)[0]:
+                    th[i], f, t[i], pref[i], moved_any[i] = _cd_point(prob, th, f, i, t[i], pref[i], lo[i], hi[i],
+                                                                      inner, tmin, tol)
+            else:
+                for batch in _cd_batches(np.where(active)[0], nbrs, CD_HOPS):
+                    th, f = _cd_batch(prob, pool, batch, th, f, t, pref, moved_any, lo, hi, inner, tmin, tol)
+            if f_round - f < max(tol, CD_REL_TOL * abs(f)):
+                break
+            active = moved_any.copy()
+            for i in np.where(moved_any)[0]:
+                active[nbrs[i]] = True
+            active &= prob.free
+            wake = active & ~moved_any
+            t[wake] = np.maximum(t[wake], t0)
+    finally:
+        if pool is not None:
+            pool.shutdown(cancel_futures=True)
     return th, f, r + 1
+
+
+def _cd_point(prob, th, f, i, t, pref, lo, hi, inner, tmin, tol):
+    """Coordinate descent's 1D search for point i from th (f = f(th)) with step
+    t, trying direction pref first. Returns (theta_i, f, t, pref, moved)."""
+    th = th.copy()
+    fails, moved_any = 0, False
+    for _ in range(inner):
+        moved = False
+        for dd in (pref, -pref):
+            ti = min(max(th[i] + dd * t, lo), max(lo, hi))
+            if ti == th[i]:
+                continue
+            old, th[i] = th[i], ti
+            f2 = prob.value(th)
+            if f2 < f - tol:
+                f, moved, pref = f2, True, dd
+                break
+            th[i] = old
+        if moved:
+            moved_any = True
+            t = min(2 * t, 0.5)
+        else:
+            t = max(0.5 * t, tmin)
+            fails += 1
+            if t == tmin or fails >= CD_FAIL_MAX:
+                break
+    return th[i], f, t, pref, moved_any
+
+
+def _cd_batches(idx, nbrs, hops):
+    """Split points idx (in order) into groups whose members are more than
+    `hops` triangulation hops apart (greedy coloring), so a move of one
+    changes no rope piece or contour vertex the others' moves touch."""
+    near = []
+    for i in idx:
+        seen, front = {i}, {i}
+        for _ in range(hops):
+            front = {int(j) for k in front for j in nbrs[k]} - seen
+            seen |= front
+        near.append(seen)
+    color, groups = {}, []
+    for i, s in zip(idx, near):
+        used = {color[j] for j in s if j in color}
+        c = next(c for c in itertools.count() if c not in used)
+        color[i] = c
+        if c == len(groups):
+            groups.append([])
+        groups[c].append(i)
+    return groups
+
+
+def _cd_batch(prob, pool, batch, th, f, t, pref, moved_any, lo, hi, inner, tmin, tol):
+    """One group of _cd_batches: each point's 1D search runs in a worker from
+    the same th, then their moves are applied together and checked with one
+    evaluation. If the combined f is not lower (the moves did interact), they
+    are applied one at a time, best first, each kept only if f drops."""
+    if len(batch) == 1:
+        i = batch[0]
+        th = th.copy()
+        th[i], f, t[i], pref[i], moved_any[i] = _cd_point(prob, th, f, i, t[i], pref[i], lo[i], hi[i], inner, tmin,
+                                                          tol)
+        return th, f
+    jobs = [pool.submit(_cd_worker_point, th, f, i, t[i], pref[i], lo[i], hi[i], inner, tmin, tol) for i in batch]
+    res = [j.result() for j in jobs]
+    moves = []
+    for i, (ti, fi, step, p, moved) in zip(batch, res):
+        t[i], pref[i] = step, p
+        if moved:
+            moves.append((fi, i, ti))
+    if not moves:
+        return th, f
+    trial = th.copy()
+    for _, i, ti in moves:
+        trial[i] = ti
+    f2 = prob.value(trial) if len(moves) > 1 else moves[0][0]
+    if f2 < f - tol:
+        for _, i, _ in moves:
+            moved_any[i] = True
+        return trial, f2
+    for _, i, ti in sorted(moves):
+        trial = th.copy()
+        trial[i] = ti
+        f2 = prob.value(trial)
+        if f2 < f - tol:
+            th, f, moved_any[i] = trial, f2, True
+    return th, f
+
+
+_CD_PROB = None
+
+
+def _cd_worker_init(blob):
+    global _CD_PROB
+    _CD_PROB = pickle.loads(blob)
+
+
+def _cd_worker_point(th, f, i, t, pref, lo, hi, inner, tmin, tol):
+    return _cd_point(_CD_PROB, th, f, i, t, pref, lo, hi, inner, tmin, tol)
 
 
 def sample_spacing(xy):
