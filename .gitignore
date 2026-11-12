@@ -10,3 +10,4 @@ Gemfile.lock
 vendor
 *.key
 assets/img/publication_preview/ours_*.png
+__pycache__/
